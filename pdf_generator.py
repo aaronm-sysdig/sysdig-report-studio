@@ -36,7 +36,7 @@ logger = logging.getLogger('pdf_generator')
 # WATERMARK CONFIGURATION - Adjust these values as needed
 # =============================================================================
 WATERMARK_PATH = "background.png"  # Path to watermark image
-WATERMARK_OPACITY = 0.08           # 0.0 = invisible, 1.0 = fully opaque (try 0.05-0.15 for subtle)
+WATERMARK_OPACITY = 0.06           # 0.0 = invisible, 1.0 = fully opaque (try 0.05-0.15 for subtle)
 
 
 class WatermarkCanvas(pdf_canvas.Canvas):
