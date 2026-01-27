@@ -225,6 +225,7 @@ def render_chart(df: pd.DataFrame, chart_type: str, chart_key: str):
     if chart_type == "table":
         formatted_df = format_datetime_columns(df)
         st.dataframe(formatted_df, hide_index=True, use_container_width=True)
+        st.caption(f"*Displaying {len(df)} records*")
         return
 
     # Pass empty title since we show it via st.subheader() above

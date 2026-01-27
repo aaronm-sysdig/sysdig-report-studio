@@ -21,6 +21,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, KeepTogether
 from reportlab.lib.enums import TA_CENTER
+from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.lib.utils import ImageReader
 
 # Import shared modules
 from charts import chart_to_image_bytes, get_chart_dimensions
@@ -29,6 +31,65 @@ from config import get_sysdig_host
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('pdf_generator')
+
+# =============================================================================
+# WATERMARK CONFIGURATION - Adjust these values as needed
+# =============================================================================
+WATERMARK_PATH = "background.png"  # Path to watermark image
+WATERMARK_OPACITY = 0.08           # 0.0 = invisible, 1.0 = fully opaque (try 0.05-0.15 for subtle)
+
+
+class WatermarkCanvas(pdf_canvas.Canvas):
+    """Custom canvas that draws watermark ON TOP of content (after page is rendered)."""
+
+    def __init__(self, *args, watermark_info=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.watermark_info = watermark_info or {}
+
+    def showPage(self):
+        """Called when a page is complete - draw watermark on top before finalizing."""
+        self._draw_watermark()
+        super().showPage()
+
+    def _draw_watermark(self):
+        """Draw the watermark overlay."""
+        if not os.path.exists(WATERMARK_PATH):
+            return
+
+        self.saveState()
+        self.setFillAlpha(WATERMARK_OPACITY)
+
+        # Get image dimensions
+        img_reader = ImageReader(WATERMARK_PATH)
+        img_width, img_height = img_reader.getSize()
+        aspect_ratio = img_width / img_height
+
+        page_width = self.watermark_info.get('page_width', 595)
+        page_height = self.watermark_info.get('page_height', 842)
+        orientation = self.watermark_info.get('orientation', 'portrait')
+
+        if orientation == "landscape":
+            # Scale to fit height (top to bottom)
+            wm_height = page_height
+            wm_width = wm_height * aspect_ratio
+        else:
+            # Scale to fit width (left to right)
+            wm_width = page_width
+            wm_height = wm_width / aspect_ratio
+
+        # Centre the watermark on the page
+        x = (page_width - wm_width) / 2
+        y = (page_height - wm_height) / 2
+
+        self.drawImage(
+            WATERMARK_PATH,
+            x, y,
+            width=wm_width,
+            height=wm_height,
+            mask='auto',
+            preserveAspectRatio=True
+        )
+        self.restoreState()
 
 
 class PDFReportGenerator:
@@ -184,7 +245,17 @@ class PDFReportGenerator:
                         story.extend(block_content)
                     i += 1
 
-            doc.build(story)
+            # Build with custom canvas that draws watermark on top of content
+            watermark_info = {
+                'page_width': self.page_size[0],
+                'page_height': self.page_size[1],
+                'orientation': self.orientation
+            }
+
+            def make_canvas(*args, **kwargs):
+                return WatermarkCanvas(*args, watermark_info=watermark_info, **kwargs)
+
+            doc.build(story, canvasmaker=make_canvas)
             self._cleanup()
             return True, None
 
@@ -249,6 +320,7 @@ class PDFReportGenerator:
             table = self._render_table(df, target_width)
             if table:
                 content.append(table)
+                content.append(Paragraph(f"<i>Displaying {len(df)} records</i>", self.styles['ElementDescription']))
             return content
 
         # For charts, use the shared charts module to create PNG
