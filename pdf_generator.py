@@ -22,27 +22,13 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, KeepTogether
 from reportlab.lib.enums import TA_CENTER
 
-# Import shared chart module
+# Import shared modules
 from charts import chart_to_image_bytes, get_chart_dimensions
+from config import get_sysdig_host
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('pdf_generator')
-
-# Region to hostname mapping - must match app.py
-SYSDIG_REGIONS = {
-    "au1": "app.au1.sysdig.com",
-    "us1": "app.us1.sysdig.com",
-    "us2": "app.us2.sysdig.com",
-    "us3": "us3.app.sysdig.com",
-    "us4": "app.us4.sysdig.com",
-    "eu1": "eu1.app.sysdig.com",
-}
-
-
-def get_sysdig_host(region: str) -> str:
-    """Get the Sysdig API hostname for a given region."""
-    return SYSDIG_REGIONS.get(region, f"app.{region}.sysdig.com")
 
 
 class PDFReportGenerator:
@@ -117,13 +103,47 @@ class PDFReportGenerator:
 
             story = []
 
-            # Title
-            customer = config.get('global', {}).get('customer', 'Security Report')
-            story.append(Paragraph(f"{customer} - Security Report", self.styles['ReportTitle']))
-            story.append(Paragraph(
-                f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
-                self.styles['Normal']
-            ))
+            # Header with title and logo
+            customer = config.get('global', {}).get('customer', '')  # Space for a suffix after customer if needs be
+            logo_path = config.get('global', {}).get('logo_path', 'logo1.png')
+
+            title_content = [
+                Paragraph(f"{customer} - Security Report", self.styles['ReportTitle']),
+                Paragraph(
+                    f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
+                    self.styles['Normal']
+                )
+            ]
+
+            # Add logo if it exists, preserving aspect ratio
+            if logo_path and os.path.exists(logo_path):
+                # Get actual image dimensions to preserve aspect ratio
+                from reportlab.lib.utils import ImageReader
+                img_reader = ImageReader(logo_path)
+                img_width, img_height = img_reader.getSize()
+                aspect_ratio = img_width / img_height
+
+                # Set max width for logo, calculate height to maintain ratio
+                logo_max_width = 2.0 * inch
+                logo_width = logo_max_width
+                logo_height = logo_width / aspect_ratio
+
+                logo_img = Image(logo_path, width=logo_width, height=logo_height)
+                logo_img.hAlign = 'RIGHT'
+
+                logo_col_width = logo_max_width + 0.2*inch
+                header_table = Table(
+                    [[title_content, logo_img]],
+                    colWidths=[self.page_width - logo_col_width, logo_col_width]
+                )
+                header_table.setStyle(TableStyle([
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                ]))
+                story.append(header_table)
+            else:
+                story.extend(title_content)
+
             story.append(Spacer(1, 20))
 
             # Process template blocks, handling half-width pairs side-by-side

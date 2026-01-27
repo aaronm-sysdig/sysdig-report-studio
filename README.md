@@ -62,7 +62,7 @@ DEFAULT_API_TOKEN = ""  # Leave empty for security, or set for local dev
 
 ### Regions
 
-The app supports multiple Sysdig regions. Add or modify regions in the `SYSDIG_REGIONS` dictionary in `app.py`:
+The app supports multiple Sysdig regions. Add or modify regions in the `SYSDIG_REGIONS` dictionary in `config.py`:
 
 ```python
 SYSDIG_REGIONS = {
@@ -99,6 +99,7 @@ This is useful for Kubernetes deployments with persistent volumes.
 sysdig-report-studio/
 ├── app.py              # Main Streamlit application
 ├── charts.py           # Chart rendering (Plotly)
+├── config.py           # Shared configuration (regions, etc.)
 ├── database.py         # SQLite data layer
 ├── pdf_generator.py    # PDF generation (ReportLab)
 ├── scheduler.py        # Background scheduler for automated reports

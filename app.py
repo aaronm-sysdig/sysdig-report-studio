@@ -12,7 +12,6 @@ import streamlit as st
 import pandas as pd
 import yaml
 import json
-import base64
 import os
 import requests
 import urllib.parse
@@ -22,42 +21,16 @@ from datetime import datetime
 import database as db
 from scheduler import start_scheduler, stop_scheduler, get_scheduler, run_template_now
 from charts import create_chart_figure
+from config import SYSDIG_REGIONS, get_sysdig_host
 
 # --- Configuration ---
 st.set_page_config(layout="wide", page_title="Sysdig Report Studio")
-LOGO_URL = "logo.png"
+LOGO_URL = "logo1.png"
 
 # Default values - change these for your environment
 DEFAULT_CUSTOMER_NAME = "Acme Corp"
 DEFAULT_API_TOKEN = ""  # Leave empty for security, or set for local dev
 
-# Region to hostname mapping - add new regions here as needed
-# Some regions use app.<region>.sysdig.com, others use <region>.app.sysdig.com
-SYSDIG_REGIONS = {
-    "au1": "app.au1.sysdig.com",
-    "us1": "app.us1.sysdig.com",
-    "us2": "app.us2.sysdig.com",
-    "us3": "us3.app.sysdig.com",
-    "us4": "app.us4.sysdig.com",
-    "eu1": "eu1.app.sysdig.com",
-}
-
-
-def get_sysdig_host(region: str) -> str:
-    """Get the Sysdig API hostname for a given region."""
-    return SYSDIG_REGIONS.get(region, f"app.{region}.sysdig.com")
-
-
-def get_base64_of_bin_file(bin_file):
-    if os.path.exists(bin_file):
-        with open(bin_file, 'rb') as f:
-            data = f.read()
-        return base64.b64encode(data).decode()
-    return ""
-
-
-img_base64 = get_base64_of_bin_file(LOGO_URL)
-img_src = f"data:image/png;base64,{img_base64}" if img_base64 else LOGO_URL
 
 # ==========================================================
 # Styling tweaks to tighten up the UI and try and remove some whitespace
@@ -65,8 +38,6 @@ img_src = f"data:image/png;base64,{img_base64}" if img_base64 else LOGO_URL
 # ==========================================================
 st.markdown(f"""
 <style>
-    .main-header {{ display: flex; align-items: center; margin-bottom: 10px; gap: 15px; }}
-    .main-header img {{ width: 50px; height: auto; }}
     /* Reduce top padding in main content area */
     .block-container {{ padding-top: 1rem !important; }}
     /* Reduce spacing in sidebar */
@@ -270,29 +241,14 @@ def render_chart(df: pd.DataFrame, chart_type: str, chart_key: str):
 # 2. SIDEBAR
 # ==========================================================
 with st.sidebar:
-    st.image(LOGO_URL, width=100)
+    st.image(LOGO_URL, width=300)
     st.header("Global Config")
-    cust_name = st.text_input("Customer Name", value=DEFAULT_CUSTOMER_NAME)
+    cust_name = st.text_input(
+        "Customer Name",
+        value=st.session_state.get('editing_customer_name', DEFAULT_CUSTOMER_NAME)
+    )
     region = st.selectbox("Sysdig Region", list(SYSDIG_REGIONS.keys()))
     api_token = st.text_input("API Token", type="password", value=DEFAULT_API_TOKEN)
-
-    st.divider()
-
-    # Scheduler controls
-    st.header("Scheduler")
-    scheduler = get_scheduler()
-    if scheduler and scheduler.is_running():
-        st.success("Running", icon="✅")
-        if st.button("⏹️ Stop Scheduler", use_container_width=True):
-            stop_scheduler()
-            st.rerun()
-    else:
-        st.warning("Stopped", icon="⏸️")
-        if api_token and st.button("▶️ Start Scheduler", use_container_width=True):
-            start_scheduler(api_token=api_token, check_interval_minutes=60)
-            st.rerun()
-        elif not api_token:
-            st.caption("Enter API token to enable")
 
     st.divider()
     st.header("Element Designer")
@@ -317,7 +273,7 @@ with st.sidebar:
         sysql_query = None
     else:
         default_q = "MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v RETURN v.severity AS Severity, count(v) AS Vulnerabilities ORDER BY Severity DESC LIMIT 4;"
-        sysql_query = st.text_area("SysQL Query", value=default_q, height=120)
+        sysql_query = st.text_area("SysQL Query", value=default_q, height=240)
         config_params = {"type": v_type.lower().replace(" ", "_"), "query": sysql_query}
 
     fetch_clicked = st.button("🚀 Fetch & Preview", use_container_width=True)
@@ -326,6 +282,8 @@ with st.sidebar:
     if st.button("🗑️ Clear Template", use_container_width=True):
         st.session_state['report_blocks'] = []
         st.session_state.pop('editing_template_id', None)
+        st.session_state.pop('editing_template_name', None)
+        st.session_state.pop('editing_customer_name', None)
         st.toast("Template Cleared!")
 
 # ==========================================================
@@ -365,8 +323,7 @@ if fetch_clicked:
 # ==========================================================
 # 4. MAIN STAGE
 # ==========================================================
-st.markdown(f'<div class="main-header"><img src="{img_src}"><h1 style="margin:0;">Sysdig Report Studio</h1></div>',
-            unsafe_allow_html=True)
+st.markdown('<h1 style="margin:0;">Sysdig Report Studio</h1>', unsafe_allow_html=True)
 
 if 'report_blocks' not in st.session_state:
     st.session_state['report_blocks'] = []
@@ -399,7 +356,7 @@ with tab_design:
                 )
 
             st.write("")
-            if st.button("➕ Add to Template", type="primary"):
+            if st.button("➕ Add to Report", type="primary"):
                 config_to_save = st.session_state['active_config'].copy()
                 config_to_save['title'] = b_title
                 st.session_state['report_blocks'].append({
@@ -466,7 +423,7 @@ def _render_block_with_controls(idx: int, block: dict):
 
 with tab_preview:
     if not st.session_state['report_blocks']:
-        st.info("No elements added yet. Design an element in the first tab and click 'Add to Template'.")
+        st.info("No elements added yet. Design an element in the first tab and click 'Add to Report'.")
     else:
         # Show editing status
         editing_id = st.session_state.get('editing_template_id')
@@ -505,7 +462,7 @@ with tab_preview:
                     yaml_blocks.append(block_config)
 
                 config = {
-                    "global": {"customer": cust_name, "region": region, "orientation": orientation},
+                    "global": {"customer": cust_name, "region": region, "orientation": orientation, "logo_path": LOGO_URL},
                     "template_blocks": yaml_blocks
                 }
                 config_yaml = yaml.dump(config, sort_keys=False)
@@ -591,33 +548,35 @@ with tab_reports:
                         if not api_token:
                             st.error("API token required to load report data")
                         else:
-                            # Load template into preview
-                            config = yaml.safe_load(tmpl['config_yaml'])
-                            tmpl_region = config.get('global', {}).get('region', region)
-                            blocks = []
-                            for block_cfg in config.get('template_blocks', []):
-                                # Fetch data for this block
-                                if block_cfg.get('type') == 'history':
-                                    if os.path.exists('vuln-history.json'):
-                                        with open('vuln-history.json') as f:
-                                            snapshot = json.load(f).get('data', [])
+                            with st.spinner("Loading report data..."):
+                                # Load template into preview
+                                config = yaml.safe_load(tmpl['config_yaml'])
+                                tmpl_region = config.get('global', {}).get('region', region)
+                                blocks = []
+                                for block_cfg in config.get('template_blocks', []):
+                                    # Fetch data for this block
+                                    if block_cfg.get('type') == 'history':
+                                        if os.path.exists('vuln-history.json'):
+                                            with open('vuln-history.json') as f:
+                                                snapshot = json.load(f).get('data', [])
+                                        else:
+                                            snapshot = []
                                     else:
-                                        snapshot = []
-                                else:
-                                    query = block_cfg.get('query', '')
-                                    if query:
-                                        data, _ = fetch_sysql_data(tmpl_region, api_token, query)
-                                        snapshot = normalize_api_data(data) if data else []
-                                    else:
-                                        snapshot = []
-                                blocks.append({
-                                    "config": block_cfg,
-                                    "snapshot": snapshot,
-                                    "width": block_cfg.get('width', 'full')
-                                })
-                            st.session_state['report_blocks'] = blocks
-                            st.session_state['editing_template_id'] = tmpl['id']
-                            st.session_state['editing_template_name'] = tmpl['name']
+                                        query = block_cfg.get('query', '')
+                                        if query:
+                                            data, _ = fetch_sysql_data(tmpl_region, api_token, query)
+                                            snapshot = normalize_api_data(data) if data else []
+                                        else:
+                                            snapshot = []
+                                    blocks.append({
+                                        "config": block_cfg,
+                                        "snapshot": snapshot,
+                                        "width": block_cfg.get('width', 'full')
+                                    })
+                                st.session_state['report_blocks'] = blocks
+                                st.session_state['editing_template_id'] = tmpl['id']
+                                st.session_state['editing_template_name'] = tmpl['name']
+                                st.session_state['editing_customer_name'] = config.get('global', {}).get('customer', DEFAULT_CUSTOMER_NAME)
                             st.toast(f"Loaded '{tmpl['name']}' for editing. Go to Report Preview tab.")
                             st.rerun()
 
@@ -734,8 +693,34 @@ with tab_reports:
     # Admin section
     st.divider()
     with st.expander("🔧 Admin Tools"):
-        st.caption(f"Database: {db.get_database_path()}")
-        st.caption(f"Reports Dir: {db.get_reports_directory()}")
+        # Scheduler controls
+        st.subheader("Scheduler")
+        scheduler = get_scheduler()
+        sched_col1, sched_col2 = st.columns([3, 1])
+        with sched_col1:
+            if scheduler and scheduler.is_running():
+                st.success("Scheduler is running", icon="✅")
+            else:
+                st.warning("Scheduler is stopped", icon="⏸️")
+        with sched_col2:
+            if scheduler and scheduler.is_running():
+                if st.button("⏹️ Stop", use_container_width=True, key="stop_sched"):
+                    stop_scheduler()
+                    st.rerun()
+            else:
+                if api_token:
+                    if st.button("▶️ Start", use_container_width=True, key="start_sched"):
+                        start_scheduler(api_token=api_token, check_interval_minutes=60)
+                        st.rerun()
+                else:
+                    st.caption("Need API token")
+
+        st.divider()
+
+        # Database info
+        st.subheader("Database")
+        st.caption(f"Path: {db.get_database_path()}")
+        st.caption(f"Reports: {db.get_reports_directory()}")
 
         col_admin1, col_admin2 = st.columns(2)
         with col_admin1:
