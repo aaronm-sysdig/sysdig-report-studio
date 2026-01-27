@@ -66,12 +66,14 @@ The app supports multiple Sysdig regions. Add or modify regions in the `SYSDIG_R
 
 ```python
 SYSDIG_REGIONS = {
-    "au1": "app.au1.sysdig.com",
-    "us1": "app.us1.sysdig.com",
-    "us2": "app.us2.sysdig.com",
-    "us3": "us3.app.sysdig.com",
-    "us4": "app.us4.sysdig.com",
-    "eu1": "eu1.app.sysdig.com",
+    "APJ": "app.au1.sysdig.com",
+    "US East": "secure.sysdig.com",
+    "EU": "eu1.app.sysdig.com",
+    "EU North": "app.eu2.sysdig.com",
+    "US West": "us2.app.sysdig.com",
+    "India": "app.in1.sysdig.com",
+    "US West (GCP)": "app.us4.sysdig.com",
+    "ME Central": "app.me2.sysdig.com"
 }
 ```
 
