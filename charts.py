@@ -67,7 +67,9 @@ def create_chart_figure(
     df: pd.DataFrame,
     chart_type: str,
     title: str,
-    for_pdf: bool = False
+    for_pdf: bool = False,
+    show_legend: bool = True,
+    chart_height: int | None = None
 ) -> go.Figure | None:
     """
     Create a Plotly figure for the given chart type.
@@ -77,6 +79,8 @@ def create_chart_figure(
         chart_type: Type of chart (history, traffic_lights, vertical_bar, horizontal_bar, pie_chart)
         title: Chart title
         for_pdf: If True, use light theme suitable for PDF output
+        show_legend: If True, show the legend (applies to bar charts)
+        chart_height: Optional height in pixels for the chart
 
     Returns:
         Plotly Figure or None for unsupported types (like table)
@@ -173,16 +177,26 @@ def create_chart_figure(
         fig = px.bar(df, x=cat_col, y=val_col, color=cat_col,
                      color_discrete_map=color_map, template=template,
                      title=title if not for_pdf else None)
+        layout_opts = {"showlegend": show_legend}
+        if chart_height:
+            layout_opts["height"] = chart_height
         if for_pdf:
-            fig.update_layout(showlegend=False, margin=dict(l=40, r=40, t=20, b=40))
+            layout_opts["showlegend"] = False
+            layout_opts["margin"] = dict(l=40, r=40, t=20, b=40)
+        fig.update_layout(**layout_opts)
         return fig
 
     elif chart_type == "horizontal_bar":
         fig = px.bar(df, x=val_col, y=cat_col, orientation='h', color=cat_col,
                      color_discrete_map=color_map, template=template,
                      title=title if not for_pdf else None)
+        layout_opts = {"showlegend": show_legend}
+        if chart_height:
+            layout_opts["height"] = chart_height
         if for_pdf:
-            fig.update_layout(showlegend=False, margin=dict(l=40, r=40, t=20, b=40))
+            layout_opts["showlegend"] = False
+            layout_opts["margin"] = dict(l=40, r=40, t=20, b=40)
+        fig.update_layout(**layout_opts)
         return fig
 
     elif chart_type == "pie_chart":
@@ -212,7 +226,8 @@ def chart_to_image_bytes(
     df: pd.DataFrame,
     chart_type: str,
     title: str,
-    width: int = 1200
+    width: int = 1200,
+    chart_height: int | None = None
 ) -> bytes | None:
     """
     Create a chart and return it as PNG bytes for PDF embedding.
@@ -222,16 +237,19 @@ def chart_to_image_bytes(
         chart_type: Type of chart
         title: Chart title
         width: Image width in pixels
+        chart_height: Optional explicit height in pixels
 
     Returns:
         PNG image bytes or None
     """
-    fig = create_chart_figure(df, chart_type, title, for_pdf=True)
+    fig = create_chart_figure(df, chart_type, title, for_pdf=True, chart_height=chart_height)
     if fig is None:
         return None
 
-    # Determine height based on chart type
-    if chart_type == "traffic_lights":
+    # Determine height based on chart type (or use provided height)
+    if chart_height:
+        height = chart_height
+    elif chart_type == "traffic_lights":
         height = TRAFFIC_LIGHT_CONFIG["height"]
     elif chart_type == "history":
         height = int(width * 0.45)
@@ -245,7 +263,104 @@ def get_chart_dimensions(chart_type: str, width: int = 1200) -> tuple[int, int]:
     """Get the dimensions for a chart type."""
     if chart_type == "traffic_lights":
         return width, TRAFFIC_LIGHT_CONFIG["height"]
-    elif chart_type == "history":
+    elif chart_type in ("history", "trend_summary"):
         return width, int(width * 0.45)
     else:
         return width, int(width * 0.5)
+
+
+def calculate_trend_insights(df: pd.DataFrame) -> list[dict]:
+    """
+    Calculate trend insights from vulnerability history data.
+
+    Compares the earliest and latest values for each severity level.
+
+    Args:
+        df: DataFrame with columns: timestamp, value, vuln_severity
+
+    Returns:
+        List of dicts with: severity, start_value, end_value, change, pct_change, trend
+    """
+    if df.empty or not all(col in df.columns for col in ["timestamp", "value", "vuln_severity"]):
+        return []
+
+    # Convert timestamp to datetime for proper sorting
+    df = df.copy()
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    insights = []
+    severity_order = ["Critical", "High", "Medium", "Low", "Negligible", "Informational"]
+
+    for severity in severity_order:
+        sev_data = df[df['vuln_severity'] == severity].sort_values('timestamp')
+
+        if len(sev_data) < 2:
+            continue
+
+        start_value = int(sev_data.iloc[0]['value'])
+        end_value = int(sev_data.iloc[-1]['value'])
+        change = end_value - start_value
+
+        if start_value > 0:
+            pct_change = (change / start_value) * 100
+        else:
+            pct_change = 100.0 if end_value > 0 else 0.0
+
+        # Determine trend: for vulnerabilities, DOWN is good (green), UP is bad (red)
+        if change < 0:
+            trend = "improved"  # Fewer vulns = good
+        elif change > 0:
+            trend = "worsened"  # More vulns = bad
+        else:
+            trend = "unchanged"
+
+        insights.append({
+            "severity": severity,
+            "start_value": start_value,
+            "end_value": end_value,
+            "change": change,
+            "pct_change": pct_change,
+            "trend": trend
+        })
+
+    return insights
+
+
+def format_trend_change(change: int, pct_change: float, trend: str) -> tuple[str, str]:
+    """
+    Format the change value with arrow indicator.
+
+    Returns:
+        Tuple of (formatted_text, trend_type) for styling
+    """
+    sign = "+" if change > 0 else ""
+    pct_str = f"{pct_change:+.1f}%"
+
+    if trend == "improved":
+        arrow = "↓"
+        return f"{sign}{change:,} ({pct_str}) {arrow}", "improved"
+    elif trend == "worsened":
+        arrow = "↑"
+        return f"{sign}{change:,} ({pct_str}) {arrow}", "worsened"
+    else:
+        return f"{change:,} (0%)", "unchanged"
+
+
+def create_insights_dataframe(insights: list[dict]) -> pd.DataFrame:
+    """Create a formatted DataFrame from insights for display."""
+    if not insights:
+        return pd.DataFrame()
+
+    rows = []
+    for item in insights:
+        change_text, _ = format_trend_change(
+            item['change'], item['pct_change'], item['trend']
+        )
+        rows.append({
+            "Severity": item['severity'],
+            "31 Days Ago": f"{item['start_value']:,}",
+            "Today": f"{item['end_value']:,}",
+            "Change": change_text
+        })
+
+    return pd.DataFrame(rows)

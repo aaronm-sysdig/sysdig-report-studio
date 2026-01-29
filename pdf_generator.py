@@ -25,7 +25,7 @@ from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.lib.utils import ImageReader
 
 # Import shared modules
-from charts import chart_to_image_bytes, get_chart_dimensions
+from charts import chart_to_image_bytes, get_chart_dimensions, calculate_trend_insights, format_trend_change
 from config import get_sysdig_host
 
 # Configure logging
@@ -283,6 +283,14 @@ class PDFReportGenerator:
             width_setting = block.get('width', 'full')
             target_width = self.page_width if width_setting == 'full' else self.page_width * 0.48
 
+        # Handle divider - just a horizontal line
+        if block_type == 'divider':
+            from reportlab.platypus import HRFlowable
+            content.append(Spacer(1, 10))
+            content.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
+            content.append(Spacer(1, 10))
+            return content
+
         # Add title
         content.append(Paragraph(title, self.styles['ElementTitle']))
 
@@ -293,7 +301,18 @@ class PDFReportGenerator:
         # Fetch data for this block
         if block_type == 'history':
             days = block.get('days', 7)
-            data, error = self._fetch_history_data(api_token, region, days)
+            zone_id = block.get('zone_id')
+            data, error = self._fetch_history_data(api_token, region, days, zone_id)
+            if error:
+                content.append(Paragraph(f"Error: {error}", self.styles['Normal']))
+                return content
+            if not data:
+                content.append(Paragraph("No history data returned", self.styles['Normal']))
+                return content
+        elif block_type == 'trend_summary':
+            # Always fetch 31 days for trend summary
+            zone_id = block.get('zone_id')
+            data, error = self._fetch_history_data(api_token, region, 31, zone_id)
             if error:
                 content.append(Paragraph(f"Error: {error}", self.styles['Normal']))
                 return content
@@ -323,9 +342,37 @@ class PDFReportGenerator:
                 content.append(Paragraph(f"<i>Displaying {len(df)} records</i>", self.styles['ElementDescription']))
             return content
 
+        # Handle trend summary - chart + insights table
+        if block_type == 'trend_summary':
+            # Render the history chart
+            img_bytes = chart_to_image_bytes(df, "history", title)
+            if img_bytes:
+                img_path = os.path.join(self.temp_dir, f"chart_{index}.png")
+                with open(img_path, 'wb') as f:
+                    f.write(img_bytes)
+
+                render_width, render_height = get_chart_dimensions("history")
+                aspect_ratio = render_width / render_height
+                img_height = target_width / aspect_ratio
+                content.append(Image(img_path, width=target_width, height=img_height))
+
+            # Add insights table
+            content.append(Spacer(1, 10))
+            content.append(Paragraph("<b>Trend Analysis</b>", self.styles['Normal']))
+            content.append(Spacer(1, 5))
+
+            insights = calculate_trend_insights(df)
+            if insights:
+                insights_table = self._render_insights_table(insights, target_width)
+                if insights_table:
+                    content.append(insights_table)
+
+            return content
+
         # For charts, use the shared charts module to create PNG
         logger.info(f"Rendering {block_type} chart: {title}")
-        img_bytes = chart_to_image_bytes(df, block_type, title)
+        chart_height = block.get('chart_height')
+        img_bytes = chart_to_image_bytes(df, block_type, title, chart_height=chart_height)
 
         if img_bytes:
             img_path = os.path.join(self.temp_dir, f"chart_{index}.png")
@@ -333,6 +380,9 @@ class PDFReportGenerator:
                 f.write(img_bytes)
 
             render_width, render_height = get_chart_dimensions(block_type)
+            # Use custom height if specified
+            if chart_height:
+                render_height = chart_height
             aspect_ratio = render_width / render_height
             img_height = target_width / aspect_ratio
 
@@ -393,7 +443,7 @@ class PDFReportGenerator:
             logger.error(f"API fetch failed: {e}")
             return None, str(e)
 
-    def _fetch_history_data(self, api_token: str, region: str, days: int) -> tuple:
+    def _fetch_history_data(self, api_token: str, region: str, days: int, zone_id: int = None) -> tuple:
         """Fetch vulnerability history from the Sysdig analytics API."""
         host = get_sysdig_host(region)
         url = f"https://{host}/api/platform/analytics/v1/data/query"
@@ -417,9 +467,12 @@ class PDFReportGenerator:
         except Exception:
             tz_name = "Etc/UTC"
 
+        # Build zone IDs list from parameter
+        zone_ids = [zone_id] if zone_id else []
+
         payload = {
             "id": "011",
-            "zoneIds": [],
+            "zoneIds": zone_ids,
             "scope": [
                 {"rightOperand": {"name": "StartTime", "value": str(start_epoch)}},
                 {"rightOperand": {"name": "EndTime", "value": str(end_epoch)}}
@@ -434,7 +487,7 @@ class PDFReportGenerator:
         }
 
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            response = requests.post(url, json=payload, headers=headers, timeout=300)  # 5 min for large date ranges
             response.raise_for_status()
             result = response.json()
 
@@ -526,6 +579,62 @@ class PDFReportGenerator:
 
         except Exception as e:
             logger.error(f"Failed to render table: {e}")
+            return None
+
+    def _render_insights_table(self, insights: list[dict], width: float) -> Optional[Table]:
+        """Render the trend insights as a styled table with colored indicators."""
+        try:
+            # Build table data
+            headers = ["Severity", "31 Days Ago", "Today", "Change"]
+            data = [headers]
+
+            row_trends = []  # Track trend for each row for coloring
+            for item in insights:
+                change_text, trend = format_trend_change(
+                    item['change'], item['pct_change'], item['trend']
+                )
+                data.append([
+                    item['severity'],
+                    f"{item['start_value']:,}",
+                    f"{item['end_value']:,}",
+                    change_text
+                ])
+                row_trends.append(trend)
+
+            col_widths = [width * 0.25, width * 0.2, width * 0.2, width * 0.35]
+
+            table = Table(data, colWidths=col_widths)
+
+            # Base style
+            style_commands = [
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (1, 1), (2, -1), 'RIGHT'),  # Right-align numbers
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cccccc')),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')])
+            ]
+
+            # Add colored text for the Change column based on trend
+            for i, trend in enumerate(row_trends):
+                row_idx = i + 1  # +1 because of header row
+                if trend == "improved":
+                    style_commands.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), colors.HexColor('#2e7d32')))
+                elif trend == "worsened":
+                    style_commands.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), colors.HexColor('#c62828')))
+
+            table.setStyle(TableStyle(style_commands))
+            return table
+
+        except Exception as e:
+            logger.error(f"Failed to render insights table: {e}")
             return None
 
     def _cleanup(self):

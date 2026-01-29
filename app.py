@@ -20,7 +20,7 @@ from datetime import datetime
 # Our own modules
 import database as db
 from scheduler import start_scheduler, stop_scheduler, get_scheduler, run_template_now
-from charts import create_chart_figure
+from charts import create_chart_figure, calculate_trend_insights, create_insights_dataframe
 from config import SYSDIG_REGIONS, get_sysdig_host
 
 # --- Configuration ---
@@ -30,6 +30,21 @@ LOGO_URL = "logo1.png"
 # Default values - change these for your environment
 DEFAULT_CUSTOMER_NAME = "Acme Corp"
 DEFAULT_API_TOKEN = ""  # Leave empty for security, or set for local dev
+
+# ==========================================================
+# Widget Type Configuration - easy to swap icons later
+# icon: emoji string OR path to image file (if ends with .png/.svg)
+# ==========================================================
+WIDGET_TYPES = [
+    {"name": "Vulnerability History", "icon": "📈", "key": "history"},
+    {"name": "Vulnerability Trend Summary", "icon": "📉", "key": "trend_summary"},
+    {"name": "Traffic Lights", "icon": "🚦", "key": "traffic_lights"},
+    {"name": "Vertical Bar", "icon": "📊", "key": "vertical_bar"},
+    {"name": "Horizontal Bar", "icon": "▤", "key": "horizontal_bar"},
+    {"name": "Pie Chart", "icon": "🥧", "key": "pie_chart"},
+    {"name": "Table", "icon": "📋", "key": "table"},
+    {"name": "Horizontal Divider", "icon": "➖", "key": "divider"},
+]
 
 
 # ==========================================================
@@ -61,6 +76,36 @@ st.markdown(f"""
 # ==========================================================
 # Used to fetch API data from Sysdig
 # ==========================================================
+def fetch_zones(region: str, api_token: str) -> tuple[list[dict] | None, str | None]:
+    """Fetch available zones from the Sysdig API."""
+    host = get_sysdig_host(region)
+    url = f"https://{host}/platform/v1/zones"
+
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Accept": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+
+        if 'data' in result:
+            # Return list of zones with id and name
+            zones = [{"id": z["id"], "name": z["name"]} for z in result['data']]
+            return zones, None
+        else:
+            return None, "Unexpected response format"
+
+    except requests.exceptions.HTTPError as e:
+        return None, f"API Error: {e.response.status_code}"
+    except requests.exceptions.RequestException as e:
+        return None, f"Request failed: {str(e)}"
+    except Exception:
+        return None, "Failed to fetch zones"
+
+
 def fetch_sysql_data(region: str, api_token: str, query: str) -> tuple[list[dict] | None, str | None]:
     """Execute a SysQL query against the Sysdig API."""
     host = get_sysdig_host(region)
@@ -102,7 +147,7 @@ def fetch_sysql_data(region: str, api_token: str, query: str) -> tuple[list[dict
         return None, "Invalid JSON response from API"
 
 
-def fetch_vulnerability_history(region: str, api_token: str, days: int) -> tuple[list[dict] | None, str | None]:
+def fetch_vulnerability_history(region: str, api_token: str, days: int, zone_id: int = None) -> tuple[list[dict] | None, str | None]:
     """Fetch vulnerability history data from the Sysdig analytics API."""
     host = get_sysdig_host(region)
     url = f"https://{host}/api/platform/analytics/v1/data/query"
@@ -126,9 +171,12 @@ def fetch_vulnerability_history(region: str, api_token: str, days: int) -> tuple
     except Exception:
         tz_name = "Etc/UTC"
 
+    # Build zone IDs list - empty means all zones
+    zone_ids = [zone_id] if zone_id else []
+
     payload = {
         "id": "011",
-        "zoneIds": [],
+        "zoneIds": zone_ids,
         "scope": [
             {"rightOperand": {"name": "StartTime", "value": str(start_epoch)}},
             {"rightOperand": {"name": "EndTime", "value": str(end_epoch)}}
@@ -143,7 +191,7 @@ def fetch_vulnerability_history(region: str, api_token: str, days: int) -> tuple
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response = requests.post(url, json=payload, headers=headers, timeout=300)  # 5 min for large date ranges
         response.raise_for_status()
         result = response.json()
 
@@ -216,8 +264,14 @@ def format_display_date(iso_string: str) -> str:
 # ==========================================================
 # 📊 CHART RENDERING
 # ==========================================================
-def render_chart(df: pd.DataFrame, chart_type: str, chart_key: str):
+def render_chart(df: pd.DataFrame, chart_type: str, chart_key: str,
+                 show_legend: bool = True, chart_height: int | None = None):
     """Render a chart in Streamlit using the shared chart creation module."""
+    # Handle divider specially - it doesn't need data
+    if chart_type == "divider":
+        st.divider()
+        return
+
     if df.empty:
         st.warning("No data to display")
         return
@@ -228,8 +282,35 @@ def render_chart(df: pd.DataFrame, chart_type: str, chart_key: str):
         st.caption(f"*Displaying {len(df)} records*")
         return
 
+    if chart_type == "trend_summary":
+        # Render the history line chart
+        fig = create_chart_figure(df, "history", "", for_pdf=False)
+        if fig:
+            st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_chart")
+
+        # Calculate and render insights table
+        insights = calculate_trend_insights(df)
+        if insights:
+            st.markdown("#### Trend Analysis")
+            insights_df = create_insights_dataframe(insights)
+
+            # Style the dataframe with colored arrows
+            def style_change(val):
+                if "↓" in str(val):
+                    return "color: #2e7d32; font-weight: bold"  # Green
+                elif "↑" in str(val):
+                    return "color: #c62828; font-weight: bold"  # Red
+                return ""
+
+            styled_df = insights_df.style.applymap(
+                style_change, subset=["Change"]
+            )
+            st.dataframe(styled_df, hide_index=True, use_container_width=True)
+        return
+
     # Pass empty title since we show it via st.subheader() above
-    fig = create_chart_figure(df, chart_type, "", for_pdf=False)
+    fig = create_chart_figure(df, chart_type, "", for_pdf=False,
+                              show_legend=show_legend, chart_height=chart_height)
 
     if fig is None:
         st.error(f"Could not create chart for type: {chart_type}")
@@ -253,31 +334,101 @@ with st.sidebar:
 
     st.divider()
     st.header("Element Designer")
-    v_type = st.selectbox("Chart Type",
-                          ["Vulnerability History", "Traffic Lights", "Vertical Bar", "Horizontal Bar", "Pie Chart",
-                           "Table"])
 
-    # Clear preview when chart type changes
-    if 'last_chart_type' not in st.session_state:
-        st.session_state['last_chart_type'] = v_type
-    elif st.session_state['last_chart_type'] != v_type:
-        st.session_state['last_chart_type'] = v_type
-        st.session_state.pop('preview_data', None)
-        st.session_state.pop('fetch_error', None)
+    # Initialize selected widget type in session state
+    if 'selected_widget_type' not in st.session_state:
+        st.session_state['selected_widget_type'] = WIDGET_TYPES[0]['name']
 
-    b_title = st.text_input("Element Title", value=f"Analysis of {v_type}")
-    b_description = st.text_area("Description (optional)", value="", height=68)
+    # Icon grid for widget type selection (4 columns, 2 rows)
+    st.caption("Widget Type")
 
-    if v_type == "Vulnerability History":
-        history_days = st.number_input("Days of History", min_value=1, max_value=31, value=7)
-        config_params = {"type": "history", "id": "011", "days": history_days, "markers": True}
+    # Row 1
+    cols1 = st.columns(4)
+    for col_idx, widget in enumerate(WIDGET_TYPES[:4]):
+        with cols1[col_idx]:
+            is_selected = st.session_state['selected_widget_type'] == widget['name']
+            btn_type = "primary" if is_selected else "secondary"
+            if st.button(widget['icon'], key=f"widget_btn_{widget['key']}",
+                         help=widget['name'], use_container_width=True, type=btn_type):
+                st.session_state['selected_widget_type'] = widget['name']
+                st.session_state.pop('preview_data', None)
+                st.session_state.pop('fetch_error', None)
+                st.rerun()
+
+    # Row 2
+    cols2 = st.columns(4)
+    for col_idx, widget in enumerate(WIDGET_TYPES[4:8]):
+        with cols2[col_idx]:
+            is_selected = st.session_state['selected_widget_type'] == widget['name']
+            btn_type = "primary" if is_selected else "secondary"
+            if st.button(widget['icon'], key=f"widget_btn_{widget['key']}",
+                         help=widget['name'], use_container_width=True, type=btn_type):
+                st.session_state['selected_widget_type'] = widget['name']
+                st.session_state.pop('preview_data', None)
+                st.session_state.pop('fetch_error', None)
+                st.rerun()
+
+    v_type = st.session_state['selected_widget_type']
+    st.caption(f"*Selected: {v_type}*")
+
+    # Horizontal divider doesn't need title/description
+    if v_type == "Horizontal Divider":
+        b_title = ""
+        b_description = ""
+    else:
+        b_title = st.text_input("Element Title", value=f"Analysis of {v_type}")
+        b_description = st.text_area("Description (optional)", value="", height=68)
+
+    # Zone selector for vulnerability history widgets
+    selected_zone_id = None
+    if v_type in ["Vulnerability History", "Vulnerability Trend Summary"]:
+        # Fetch zones if we have an API token and haven't already
+        if api_token:
+            cache_key = f"zones_{region}"
+            if cache_key not in st.session_state:
+                zones, error = fetch_zones(region, api_token)
+                if zones:
+                    st.session_state[cache_key] = zones
+                else:
+                    st.session_state[cache_key] = []
+
+            zones = st.session_state.get(cache_key, [])
+            if zones:
+                zone_options = {z["name"]: z["id"] for z in zones}
+                zone_names = ["All Zones"] + list(zone_options.keys())
+                selected_zone_name = st.selectbox("Zone", zone_names)
+                if selected_zone_name != "All Zones":
+                    selected_zone_id = zone_options[selected_zone_name]
+
+    if v_type == "Horizontal Divider":
+        st.caption("*A horizontal line to separate sections and reset half-width alignment*")
+        config_params = {"type": "divider"}
         sysql_query = None
+        # Direct add button for divider (no fetch needed)
+        if st.button("➕ Add Divider to Report", use_container_width=True, type="primary"):
+            st.session_state['report_blocks'].append({
+                "config": config_params.copy(),
+                "snapshot": [],
+                "width": "full"  # Dividers are always full width
+            })
+            st.toast("Divider added to report!")
+        fetch_clicked = False
+    elif v_type == "Vulnerability History":
+        history_days = st.number_input("Days of History", min_value=1, max_value=31, value=7)
+        config_params = {"type": "history", "id": "011", "days": history_days, "markers": True, "zone_id": selected_zone_id}
+        sysql_query = None
+        fetch_clicked = st.button("🚀 Fetch & Preview", use_container_width=True)
+    elif v_type == "Vulnerability Trend Summary":
+        # Hardcoded to 31 days for trend analysis
+        st.caption("*Analyses 31 days of vulnerability data with change insights*")
+        config_params = {"type": "trend_summary", "id": "011", "days": 31, "zone_id": selected_zone_id}
+        sysql_query = None
+        fetch_clicked = st.button("🚀 Fetch & Preview", use_container_width=True)
     else:
         default_q = "MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v RETURN v.severity AS Severity, count(v) AS Vulnerabilities ORDER BY Severity DESC LIMIT 4;"
         sysql_query = st.text_area("SysQL Query", value=default_q, height=240)
         config_params = {"type": v_type.lower().replace(" ", "_"), "query": sysql_query}
-
-    fetch_clicked = st.button("🚀 Fetch & Preview", use_container_width=True)
+        fetch_clicked = st.button("🚀 Fetch & Preview", use_container_width=True)
 
     st.divider()
     if st.button("🗑️ Clear Template", use_container_width=True):
@@ -298,7 +449,18 @@ if fetch_clicked:
         if not api_token:
             st.session_state['fetch_error'] = "API Token is required"
         else:
-            raw_data, error = fetch_vulnerability_history(region, api_token, history_days)
+            raw_data, error = fetch_vulnerability_history(region, api_token, history_days, selected_zone_id)
+            if error:
+                st.session_state['fetch_error'] = error
+            elif raw_data:
+                st.session_state['preview_data'] = raw_data
+            else:
+                st.session_state['fetch_error'] = "No data returned from query"
+    elif v_type == "Vulnerability Trend Summary":
+        if not api_token:
+            st.session_state['fetch_error'] = "API Token is required"
+        else:
+            raw_data, error = fetch_vulnerability_history(region, api_token, 31, selected_zone_id)
             if error:
                 st.session_state['fetch_error'] = error
             elif raw_data:
@@ -344,7 +506,12 @@ with tab_design:
         st.subheader(b_title)
         if b_description:
             st.caption(f"*{b_description}*")
-        render_chart(preview_df, chart_type, f"designer_{chart_type}")
+
+        # Get current options for live preview (use defaults before options are set)
+        preview_show_legend = st.session_state.get('element_show_legend', True)
+        preview_height = st.session_state.get('element_height', None)
+        render_chart(preview_df, chart_type, f"designer_{chart_type}",
+                     show_legend=preview_show_legend, chart_height=preview_height)
 
         opt_col, _ = st.columns([1, 2])
         with opt_col:
@@ -356,17 +523,36 @@ with tab_design:
                     horizontal=True
                 )
 
+                # Show legend option for bar charts
+                chart_type = st.session_state['active_config']['type']
+                show_legend = True
+                element_height = None
+                if chart_type in ["vertical_bar", "horizontal_bar"]:
+                    show_legend = st.checkbox("Show Legend", value=True, key="element_show_legend")
+                    element_height = st.slider(
+                        "Chart Height",
+                        min_value=200,
+                        max_value=800,
+                        value=400,
+                        step=50,
+                        key="element_height",
+                        help="Height of the chart in pixels"
+                    )
+
             st.write("")
             if st.button("➕ Add to Report", type="primary"):
                 config_to_save = st.session_state['active_config'].copy()
                 config_to_save['title'] = b_title
+                config_to_save['show_legend'] = show_legend
+                if element_height:
+                    config_to_save['chart_height'] = element_height
                 st.session_state['report_blocks'].append({
                     "config": config_to_save,
                     "snapshot": st.session_state['preview_data'],
                     "width": "half" if element_width == "Half Width" else "full"
                 })
                 st.toast("Added to Report Preview!")
-    else:
+    elif v_type != "Horizontal Divider":
         st.info("Enter a SysQL query and click 'Fetch & Preview' to see your data.")
 
 # ==========================================================
@@ -391,6 +577,28 @@ def _render_block_with_controls(idx: int, block: dict):
     block_df = pd.DataFrame(block['snapshot'])
     width = block.get('width', 'full')
     width_icon = "◧" if width == 'half' else "▢"
+
+    # Dividers get simplified rendering
+    if conf['type'] == 'divider':
+        div_col1, div_col2 = st.columns([6, 1])
+        with div_col1:
+            st.divider()
+        with div_col2:
+            btn_cols = st.columns(3)
+            with btn_cols[0]:
+                if st.button("⬆", key=f"blk_up_{idx}", help="Move up", disabled=(idx == 0)):
+                    move_block(idx, idx - 1)
+                    st.rerun()
+            with btn_cols[1]:
+                if st.button("⬇", key=f"blk_down_{idx}", help="Move down",
+                             disabled=(idx >= len(st.session_state['report_blocks']) - 1)):
+                    move_block(idx, idx + 1)
+                    st.rerun()
+            with btn_cols[2]:
+                if st.button("✕", key=f"blk_del_{idx}", help="Delete"):
+                    delete_block(idx)
+                    st.rerun()
+        return
 
     with st.container(border=True):
         header_col, controls_col = st.columns([4, 1])
@@ -419,7 +627,9 @@ def _render_block_with_controls(idx: int, block: dict):
                     delete_block(idx)
                     st.rerun()
 
-        render_chart(block_df, conf['type'], f"report_{conf['type']}_{idx}")
+        render_chart(block_df, conf['type'], f"report_{conf['type']}_{idx}",
+                     show_legend=conf.get('show_legend', True),
+                     chart_height=conf.get('chart_height'))
 
 
 with tab_preview:
