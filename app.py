@@ -32,19 +32,51 @@ DEFAULT_CUSTOMER_NAME = "Acme Corp"
 DEFAULT_API_TOKEN = ""  # Leave empty for security, or set for local dev
 
 # ==========================================================
-# Widget Type Configuration - easy to swap icons later
+# Widget Type Configuration - organised into sections
 # icon: emoji string OR path to image file (if ends with .png/.svg)
 # ==========================================================
-WIDGET_TYPES = [
-    {"name": "Vulnerability History", "icon": "📈", "key": "history"},
-    {"name": "Vulnerability Trend Summary", "icon": "📉", "key": "trend_summary"},
-    {"name": "Traffic Lights", "icon": "🚦", "key": "traffic_lights"},
-    {"name": "Vertical Bar", "icon": "📊", "key": "vertical_bar"},
-    {"name": "Horizontal Bar", "icon": "▤", "key": "horizontal_bar"},
-    {"name": "Pie Chart", "icon": "🥧", "key": "pie_chart"},
-    {"name": "Table", "icon": "📋", "key": "table"},
-    {"name": "Horizontal Divider", "icon": "➖", "key": "divider"},
+WIDGET_CATEGORIES = [
+    {
+        "section": "Runtime Vulnerabilities",
+        "widgets": [
+            {"name": "Vulnerability History", "icon": "📈", "key": "history"},
+            {"name": "Vulnerability Trend Summary", "icon": "📉", "key": "trend_summary"},
+            {"name": "Traffic Lights", "icon": "🚦", "key": "traffic_lights"},
+            {"name": "Vertical Bar", "icon": "📊", "key": "vertical_bar"},
+            {"name": "Horizontal Bar", "icon": "▤", "key": "horizontal_bar"},
+            {"name": "Donut Chart", "icon": "🍩", "key": "donut_chart"},
+            {"name": "Table", "icon": "📋", "key": "table"},
+            {"name": "Horizontal Divider", "icon": "➖", "key": "divider"},
+        ]
+    },
+    {
+        "section": "Registry Vulnerabilities",
+        "widgets": [
+            {"name": "Top Vulnerable Images", "icon": "🔝", "key": "reg_top_images"},
+            {"name": "Severity Distribution", "icon": "🎯", "key": "reg_severity_dist"},
+            {"name": "Vulns by Vendor", "icon": "🏭", "key": "reg_by_vendor"},
+            {"name": "Images to Patch", "icon": "🔧", "key": "reg_patch_priority"},
+        ]
+    },
+    {
+        "section": "Posture & Compliance",
+        "widgets": [
+            {"name": "Compliance Failures", "icon": "🥧", "key": "posture_failures"},
+            {"name": "Top Contributors", "icon": "📊", "key": "posture_top_contributors"},
+            {"name": "Severity by Owner", "icon": "📉", "key": "posture_severity_by_owner"},
+            {"name": "Control Heatmap", "icon": "🔥", "key": "posture_heatmap"},
+        ]
+    }
 ]
+
+# Flat list of all widgets for lookups
+ALL_WIDGETS = [w for cat in WIDGET_CATEGORIES for w in cat["widgets"]]
+
+# Registry widget keys (share a single API fetch)
+REGISTRY_WIDGET_KEYS = {w["key"] for w in WIDGET_CATEGORIES[1]["widgets"]}
+
+# Posture widget keys (share uploaded CSV data)
+POSTURE_WIDGET_KEYS = {w["key"] for w in WIDGET_CATEGORIES[2]["widgets"]}
 
 
 # ==========================================================
@@ -314,6 +346,9 @@ def render_chart(df: pd.DataFrame, chart_type: str, chart_key: str,
 
     if fig is None:
         st.error(f"Could not create chart for type: {chart_type}")
+        # Debug: show what columns we have
+        st.caption(f"Debug - DataFrame columns: {df.columns.tolist()}")
+        st.caption(f"Debug - DataFrame shape: {df.shape}")
         return
 
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
@@ -337,38 +372,30 @@ with st.sidebar:
 
     # Initialize selected widget type in session state
     if 'selected_widget_type' not in st.session_state:
-        st.session_state['selected_widget_type'] = WIDGET_TYPES[0]['name']
+        st.session_state['selected_widget_type'] = ALL_WIDGETS[0]['name']
 
-    # Icon grid for widget type selection (4 columns, 2 rows)
-    st.caption("Widget Type")
-
-    # Row 1
-    cols1 = st.columns(4)
-    for col_idx, widget in enumerate(WIDGET_TYPES[:4]):
-        with cols1[col_idx]:
-            is_selected = st.session_state['selected_widget_type'] == widget['name']
-            btn_type = "primary" if is_selected else "secondary"
-            if st.button(widget['icon'], key=f"widget_btn_{widget['key']}",
-                         help=widget['name'], use_container_width=True, type=btn_type):
-                st.session_state['selected_widget_type'] = widget['name']
-                st.session_state.pop('preview_data', None)
-                st.session_state.pop('fetch_error', None)
-                st.rerun()
-
-    # Row 2
-    cols2 = st.columns(4)
-    for col_idx, widget in enumerate(WIDGET_TYPES[4:8]):
-        with cols2[col_idx]:
-            is_selected = st.session_state['selected_widget_type'] == widget['name']
-            btn_type = "primary" if is_selected else "secondary"
-            if st.button(widget['icon'], key=f"widget_btn_{widget['key']}",
-                         help=widget['name'], use_container_width=True, type=btn_type):
-                st.session_state['selected_widget_type'] = widget['name']
-                st.session_state.pop('preview_data', None)
-                st.session_state.pop('fetch_error', None)
-                st.rerun()
+    # Widget type selection - organised by category
+    for cat in WIDGET_CATEGORIES:
+        st.caption(cat["section"])
+        widgets = cat["widgets"]
+        # Render in rows of 4
+        for row_start in range(0, len(widgets), 4):
+            row_widgets = widgets[row_start:row_start + 4]
+            cols = st.columns(4)
+            for col_idx, widget in enumerate(row_widgets):
+                with cols[col_idx]:
+                    is_selected = st.session_state['selected_widget_type'] == widget['name']
+                    btn_type = "primary" if is_selected else "secondary"
+                    if st.button(widget['icon'], key=f"widget_btn_{widget['key']}",
+                                 help=widget['name'], use_container_width=True, type=btn_type):
+                        st.session_state['selected_widget_type'] = widget['name']
+                        st.session_state.pop('preview_data', None)
+                        st.session_state.pop('fetch_error', None)
+                        st.rerun()
 
     v_type = st.session_state['selected_widget_type']
+    # Look up the widget key for this name
+    v_key = next((w["key"] for w in ALL_WIDGETS if w["name"] == v_type), v_type.lower().replace(" ", "_"))
     st.caption(f"*Selected: {v_type}*")
 
     # Horizontal divider doesn't need title/description
@@ -424,10 +451,24 @@ with st.sidebar:
         config_params = {"type": "trend_summary", "id": "011", "days": 31, "zone_id": selected_zone_id}
         sysql_query = None
         fetch_clicked = st.button("🚀 Fetch & Preview", use_container_width=True)
+    elif v_key in REGISTRY_WIDGET_KEYS:
+        # Registry vulnerability widgets - share a single API fetch
+        st.caption("*Fetches container image vulnerabilities from the Sysdig registry scanner*")
+        config_params = {"type": v_key, "data_source": "registry"}
+        sysql_query = None
+        fetch_clicked = st.button("🚀 Fetch Registry Data", use_container_width=True)
+    elif v_key in POSTURE_WIDGET_KEYS:
+        # Posture & compliance widgets - CSV upload
+        st.caption("*Upload a posture report CSV exported from Sysdig*")
+        posture_group_by = st.selectbox("Group failures by", ["Zones", "Account Id"], index=0)
+        posture_file = st.file_uploader("Posture CSV", type=["csv", "gz", "zip"], key="posture_csv_upload")
+        config_params = {"type": v_key, "data_source": "posture", "group_by": posture_group_by}
+        sysql_query = None
+        fetch_clicked = st.button("🚀 Process & Preview", use_container_width=True)
     else:
         default_q = "MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v RETURN v.severity AS Severity, count(v) AS Vulnerabilities ORDER BY Severity DESC LIMIT 4;"
         sysql_query = st.text_area("SysQL Query", value=default_q, height=240)
-        config_params = {"type": v_type.lower().replace(" ", "_"), "query": sysql_query}
+        config_params = {"type": v_key, "query": sysql_query}
         fetch_clicked = st.button("🚀 Fetch & Preview", use_container_width=True)
 
     st.divider()
@@ -467,6 +508,36 @@ if fetch_clicked:
                 st.session_state['preview_data'] = raw_data
             else:
                 st.session_state['fetch_error'] = "No data returned from query"
+    elif v_key in REGISTRY_WIDGET_KEYS:
+        if not api_token:
+            st.session_state['fetch_error'] = "API Token is required"
+        else:
+            from registry_vulns import fetch_registry_results, normalize_registry_data
+            results, error = fetch_registry_results(region, api_token)
+            if error:
+                st.session_state['fetch_error'] = error
+            elif results:
+                df = normalize_registry_data(results)
+                st.session_state['preview_data'] = df.to_dict('records')
+                st.session_state['registry_data'] = df.to_dict('records')
+            else:
+                st.session_state['fetch_error'] = "No registry data returned"
+    elif v_key in POSTURE_WIDGET_KEYS:
+        if not posture_file:
+            st.session_state['fetch_error'] = "Please upload a posture CSV file"
+        else:
+            from posture import load_posture_csv, aggregate_posture_data
+            try:
+                _, df_fail = load_posture_csv(posture_file)
+                aggregated = aggregate_posture_data(df_fail, group_by=posture_group_by)
+                # Store the chart-specific data based on widget type
+                chart_data = aggregated.get(v_key, aggregated.get("owner_stats", []))
+                if isinstance(chart_data, pd.DataFrame):
+                    chart_data = chart_data.to_dict('records')
+                st.session_state['preview_data'] = chart_data
+                st.session_state['posture_data'] = aggregated
+            except Exception as e:
+                st.session_state['fetch_error'] = f"Error processing CSV: {str(e)}"
     else:
         if not api_token:
             st.session_state['fetch_error'] = "API Token is required"
@@ -546,6 +617,12 @@ with tab_design:
                 config_to_save['show_legend'] = show_legend
                 if element_height:
                     config_to_save['chart_height'] = element_height
+
+                # For posture blocks, embed the data in the config for PDF generation
+                # (since CSV files can't be re-read during scheduled generation)
+                if config_to_save.get('data_source') == 'posture':
+                    config_to_save['embedded_data'] = st.session_state['preview_data']
+
                 st.session_state['report_blocks'].append({
                     "config": config_to_save,
                     "snapshot": st.session_state['preview_data'],
@@ -553,7 +630,15 @@ with tab_design:
                 })
                 st.toast("Added to Report Preview!")
     elif v_type != "Horizontal Divider":
-        st.info("Enter a SysQL query and click 'Fetch & Preview' to see your data.")
+        # Show appropriate hint based on widget type
+        if v_key in REGISTRY_WIDGET_KEYS:
+            st.info("Click 'Fetch Registry Data' to load vulnerability data.")
+        elif v_key in POSTURE_WIDGET_KEYS:
+            st.info("Upload a posture CSV and click 'Process & Preview' to see your data.")
+        elif v_type in ["Vulnerability History", "Vulnerability Trend Summary"]:
+            st.info("Click 'Fetch & Preview' to load vulnerability history data.")
+        else:
+            st.info("Enter a SysQL query and click 'Fetch & Preview' to see your data.")
 
 # ==========================================================
 # 5. REPORT PREVIEW

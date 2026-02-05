@@ -299,6 +299,8 @@ class PDFReportGenerator:
             content.append(Paragraph(f"<i>{description}</i>", self.styles['ElementDescription']))
 
         # Fetch data for this block
+        data_source = block.get('data_source', '')
+
         if block_type == 'history':
             days = block.get('days', 7)
             zone_id = block.get('zone_id')
@@ -318,6 +320,24 @@ class PDFReportGenerator:
                 return content
             if not data:
                 content.append(Paragraph("No history data returned", self.styles['Normal']))
+                return content
+        elif data_source == 'registry':
+            # Registry vuln data - fetch fresh from API
+            from registry_vulns import fetch_registry_results, normalize_registry_data
+            results, error = fetch_registry_results(region, api_token)
+            if error:
+                content.append(Paragraph(f"Error: {error}", self.styles['Normal']))
+                return content
+            reg_df = normalize_registry_data(results)
+            if reg_df.empty:
+                content.append(Paragraph("No registry data returned", self.styles['Normal']))
+                return content
+            data = reg_df.to_dict('records')
+        elif data_source == 'posture':
+            # Posture data - read from embedded data in template config
+            data = block.get('embedded_data', [])
+            if not data:
+                content.append(Paragraph("No posture data embedded in template", self.styles['Normal']))
                 return content
         else:
             query = block.get('query', '')
