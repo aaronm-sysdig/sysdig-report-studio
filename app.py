@@ -86,21 +86,20 @@ POSTURE_WIDGET_KEYS = {w["key"] for w in WIDGET_CATEGORIES[2]["widgets"]}
 # ==========================================================
 st.markdown("""
 <style>
-    /* Reduce top padding in main content area */
-    .block-container { padding-top: 1rem !important; }
-    /* Reduce spacing in sidebar */
-    [data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+    /* Main content area - keep space for toolbar */
+    .block-container { padding-top: 2rem !important; }
+    /* Remove sidebar header and add padding for logo */
+    [data-testid="stSidebarHeader"] { display: none !important; }
+    [data-testid="stSidebarContent"] { padding-top: 2rem !important; }
     [data-testid="stSidebar"] hr { margin: 0.5rem 0; }
     /* Tighter headings */
-    h1, h2, h3 { margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }
-    /* Reduce expander padding */
+    h1 { padding-top: 0 !important; padding-bottom: 0.5rem !important; margin-top: 0 !important; margin-bottom: 0.5rem !important; }
+    h2, h3 { margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }
+    /* Tighter expanders and containers */
     .streamlit-expanderHeader { padding: 0.5rem 0 !important; }
     .streamlit-expanderContent { padding-top: 0.5rem !important; }
-    /* Tighter containers */
     [data-testid="stVerticalBlock"] > div { gap: 0.5rem; }
-    /* Reduce caption margins */
     .stCaption { margin-bottom: 0.25rem !important; }
-    /* Tighter tab content */
     .stTabs [data-baseweb="tab-panel"] { padding-top: 0.5rem !important; }
 </style>
 """, unsafe_allow_html=True)
