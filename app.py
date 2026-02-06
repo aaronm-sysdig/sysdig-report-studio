@@ -80,27 +80,28 @@ POSTURE_WIDGET_KEYS = {w["key"] for w in WIDGET_CATEGORIES[2]["widgets"]}
 
 
 # ==========================================================
-# Styling tweaks to tighten up the UI and try and remove some whitespace
-# Not easy so it still has more than I want it to
+# Styling tweaks to tighten up the UI and remove whitespace
+# Theme is controlled via .streamlit/config.toml
+# Users can toggle dark/light mode via Settings menu (⋮ → Settings)
 # ==========================================================
-st.markdown(f"""
+st.markdown("""
 <style>
     /* Reduce top padding in main content area */
-    .block-container {{ padding-top: 1rem !important; }}
+    .block-container { padding-top: 1rem !important; }
     /* Reduce spacing in sidebar */
-    [data-testid="stSidebar"] .block-container {{ padding-top: 1rem; }}
-    [data-testid="stSidebar"] hr {{ margin: 0.5rem 0; }}
+    [data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+    [data-testid="stSidebar"] hr { margin: 0.5rem 0; }
     /* Tighter headings */
-    h1, h2, h3 {{ margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }}
+    h1, h2, h3 { margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }
     /* Reduce expander padding */
-    .streamlit-expanderHeader {{ padding: 0.5rem 0 !important; }}
-    .streamlit-expanderContent {{ padding-top: 0.5rem !important; }}
+    .streamlit-expanderHeader { padding: 0.5rem 0 !important; }
+    .streamlit-expanderContent { padding-top: 0.5rem !important; }
     /* Tighter containers */
-    [data-testid="stVerticalBlock"] > div {{ gap: 0.5rem; }}
+    [data-testid="stVerticalBlock"] > div { gap: 0.5rem; }
     /* Reduce caption margins */
-    .stCaption {{ margin-bottom: 0.25rem !important; }}
+    .stCaption { margin-bottom: 0.25rem !important; }
     /* Tighter tab content */
-    .stTabs [data-baseweb="tab-panel"] {{ padding-top: 0.5rem !important; }}
+    .stTabs [data-baseweb="tab-panel"] { padding-top: 0.5rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1032,3 +1033,6 @@ with tab_reports:
                     f.write(uploaded_db.read())
                 st.success("Database uploaded!")
                 st.rerun()
+
+        st.divider()
+        st.caption("💡 To switch between dark/light theme, use the menu (⋮) → Settings")

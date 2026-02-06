@@ -69,7 +69,8 @@ def create_chart_figure(
     title: str,
     for_pdf: bool = False,
     show_legend: bool = True,
-    chart_height: int | None = None
+    chart_height: int | None = None,
+    dark_mode: bool = True
 ) -> go.Figure | None:
     """
     Create a Plotly figure for the given chart type.
@@ -78,9 +79,10 @@ def create_chart_figure(
         df: Data to chart
         chart_type: Type of chart (history, traffic_lights, vertical_bar, horizontal_bar, donut_chart/pie_chart)
         title: Chart title
-        for_pdf: If True, use light theme suitable for PDF output
+        for_pdf: If True, use light theme suitable for PDF output (overrides dark_mode)
         show_legend: If True, show the legend (applies to bar charts)
         chart_height: Optional height in pixels for the chart
+        dark_mode: If True, use dark theme for live preview (ignored if for_pdf=True)
 
     Returns:
         Plotly Figure or None for unsupported types (like table)
@@ -89,7 +91,8 @@ def create_chart_figure(
         return None
 
     columns = df.columns.tolist()
-    template = "plotly_white" if for_pdf else "plotly_dark"
+    # PDF always uses light theme; live preview respects dark_mode setting
+    template = "plotly_white" if (for_pdf or not dark_mode) else "plotly_dark"
 
     cat_col, val_col = detect_columns(df)
     color_map = get_color_map_for_data(df, cat_col) if cat_col else {}
