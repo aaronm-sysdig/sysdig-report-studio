@@ -323,12 +323,15 @@ class PDFReportGenerator:
                 return content
         elif data_source == 'registry':
             # Registry vuln data - fetch fresh from API
-            from registry_vulns import fetch_registry_results, normalize_registry_data
-            results, error = fetch_registry_results(region, api_token)
-            if error:
-                content.append(Paragraph(f"Error: {error}", self.styles['Normal']))
+            from registry_analytics import fetch_registry_results, normalize_image_data
+            try:
+                host = get_sysdig_host(region)
+                base_url = f"https://{host}"
+                results = fetch_registry_results(api_token, base_url)
+            except Exception as e:
+                content.append(Paragraph(f"Error: {str(e)}", self.styles['Normal']))
                 return content
-            reg_df = normalize_registry_data(results)
+            reg_df = normalize_image_data(results)
             if reg_df.empty:
                 content.append(Paragraph("No registry data returned", self.styles['Normal']))
                 return content
