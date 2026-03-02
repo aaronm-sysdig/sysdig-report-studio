@@ -5,6 +5,8 @@ This module handles all the Plotly chart creation. It's shared between the live
 preview and PDF generation so everything looks consistent. If you change how a
 chart looks here, it'll update everywhere.
 """
+from __future__ import annotations
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -69,18 +71,20 @@ def create_chart_figure(
     title: str,
     for_pdf: bool = False,
     show_legend: bool = True,
-    chart_height: int | None = None
+    chart_height: int | None = None,
+    dark_mode: bool = True
 ) -> go.Figure | None:
     """
     Create a Plotly figure for the given chart type.
 
     Args:
         df: Data to chart
-        chart_type: Type of chart (history, traffic_lights, vertical_bar, horizontal_bar, pie_chart)
+        chart_type: Type of chart (history, traffic_lights, vertical_bar, horizontal_bar, donut_chart/pie_chart)
         title: Chart title
-        for_pdf: If True, use light theme suitable for PDF output
+        for_pdf: If True, use light theme suitable for PDF output (overrides dark_mode)
         show_legend: If True, show the legend (applies to bar charts)
         chart_height: Optional height in pixels for the chart
+        dark_mode: If True, use dark theme for live preview (ignored if for_pdf=True)
 
     Returns:
         Plotly Figure or None for unsupported types (like table)
@@ -89,7 +93,8 @@ def create_chart_figure(
         return None
 
     columns = df.columns.tolist()
-    template = "plotly_white" if for_pdf else "plotly_dark"
+    # PDF always uses light theme; live preview respects dark_mode setting
+    template = "plotly_white" if (for_pdf or not dark_mode) else "plotly_dark"
 
     cat_col, val_col = detect_columns(df)
     color_map = get_color_map_for_data(df, cat_col) if cat_col else {}
@@ -199,21 +204,303 @@ def create_chart_figure(
         fig.update_layout(**layout_opts)
         return fig
 
-    elif chart_type == "pie_chart":
+    elif chart_type in ("donut_chart", "pie_chart"):
         total = df[val_col].sum()
         labels = []
+        colors = []
         for _, row in df.iterrows():
             cat = row[cat_col]
             val = int(row[val_col])
             pct = (val / total * 100) if total > 0 else 0
             labels.append(f"{cat} ({val:,}) - {pct:.1f}%")
+            if cat in SEVERITY_COLORS:
+                colors.append(SEVERITY_COLORS[cat])
+            elif color_map and cat in color_map:
+                colors.append(color_map[cat])
 
-        fig = px.pie(df, names=labels, values=val_col,
-                     color=cat_col, color_discrete_map=color_map, template=template,
-                     title=title if not for_pdf else None)
-        fig.update_traces(textinfo='label', textposition='outside')
+        fig = go.Figure(go.Pie(
+            labels=labels,
+            values=df[val_col].tolist(),
+            hole=0.4,
+            textinfo='label',
+            textposition='outside',
+            marker_colors=colors if colors else None,
+            sort=False
+        ))
+        fig.add_annotation(
+            text=f"<b>{int(total):,}</b><br>Total",
+            x=0.5, y=0.5, font_size=15, showarrow=False
+        )
+        if not for_pdf and title:
+            fig.update_layout(title=dict(text=title), template=template)
+        else:
+            fig.update_layout(template=template)
         if for_pdf:
             fig.update_layout(showlegend=False, margin=dict(l=20, r=20, t=20, b=20))
+        return fig
+
+    # ================================================================
+    # Registry Vulnerability chart types
+    # ================================================================
+    elif chart_type == "reg_top_images":
+        # Stacked horizontal bar of top N images by severity
+        if 'display_name' not in df.columns:
+            return None
+        top_n = min(10, len(df))
+        top_df = df.head(top_n).sort_values('total_vulns', ascending=True)
+
+        fig = go.Figure()
+        severity_order = ["Critical", "High", "Medium", "Low", "Negligible"]
+        for sev in severity_order:
+            col = sev.lower()
+            if col in top_df.columns:
+                fig.add_trace(go.Bar(
+                    y=top_df['display_name'].apply(
+                        lambda n: n[:35] + '...' if len(n) > 35 else n),
+                    x=top_df[col],
+                    name=sev,
+                    orientation='h',
+                    marker_color=SEVERITY_COLORS.get(sev, '#757575'),
+                ))
+
+        fig.update_layout(
+            barmode='stack', template=template,
+            title=title if not for_pdf else None,
+            height=chart_height or 500,
+            xaxis=dict(title='Vulnerability Count'),
+            yaxis=dict(type='category', automargin=True),
+            legend=dict(orientation='h', yanchor='top', y=-0.15,
+                        xanchor='center', x=0.5),
+        )
+        if for_pdf:
+            fig.update_layout(margin=dict(l=40, r=40, t=20, b=80))
+        return fig
+
+    elif chart_type == "reg_severity_dist":
+        # Donut chart of total vulns by severity across all images
+        severity_order = ["Critical", "High", "Medium", "Low", "Negligible"]
+        sev_totals = {}
+        for sev in severity_order:
+            col = sev.lower()
+            if col in df.columns:
+                total_sev = int(df[col].sum())
+                if total_sev > 0:
+                    sev_totals[sev] = total_sev
+
+        if not sev_totals:
+            return None
+
+        labels = list(sev_totals.keys())
+        values = list(sev_totals.values())
+        sev_colors = [SEVERITY_COLORS.get(s, '#757575') for s in labels]
+        total = sum(values)
+
+        formatted_labels = []
+        for s, v in zip(labels, values):
+            pct = (v / total * 100) if total > 0 else 0
+            formatted_labels.append(f"{s} ({v:,}) - {pct:.1f}%")
+
+        fig = go.Figure(go.Pie(
+            labels=formatted_labels, values=values,
+            hole=0.4, textinfo='label', textposition='outside',
+            marker_colors=sev_colors, sort=False
+        ))
+        fig.add_annotation(
+            text=f"<b>{total:,}</b><br>Total",
+            x=0.5, y=0.5, font_size=15, showarrow=False
+        )
+        if not for_pdf and title:
+            fig.update_layout(title=dict(text=title), template=template)
+        else:
+            fig.update_layout(template=template)
+        if for_pdf:
+            fig.update_layout(showlegend=False, margin=dict(l=20, r=20, t=20, b=20))
+        return fig
+
+    elif chart_type == "reg_by_vendor":
+        # Horizontal bar of vulnerabilities by vendor
+        if 'vendor' not in df.columns or 'total_vulns' not in df.columns:
+            return None
+        vendor_data = df.groupby('vendor')['total_vulns'].sum().reset_index()
+        vendor_data = vendor_data.sort_values('total_vulns', ascending=True).tail(10)
+
+        fig = px.bar(
+            vendor_data, x='total_vulns', y='vendor', orientation='h',
+            template=template, title=title if not for_pdf else None
+        )
+        fig.update_traces(marker_color='#ffa000')
+        layout_opts = {"showlegend": False}
+        if chart_height:
+            layout_opts["height"] = chart_height
+        if for_pdf:
+            layout_opts["margin"] = dict(l=40, r=40, t=20, b=40)
+        fig.update_layout(**layout_opts)
+        return fig
+
+    elif chart_type == "reg_patch_priority":
+        # Stacked bar of top images by critical + high count
+        if not all(c in df.columns for c in ['display_name', 'critical', 'high']):
+            return None
+        df_p = df.copy()
+        df_p['crit_high'] = df_p['critical'] + df_p['high']
+        df_p = df_p[df_p['crit_high'] > 0].sort_values(
+            'crit_high', ascending=True).tail(10)
+
+        if df_p.empty:
+            return None
+
+        short_names = df_p['display_name'].apply(
+            lambda n: n[:35] + '...' if len(n) > 35 else n)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=short_names, x=df_p['critical'], name='Critical',
+            orientation='h', marker_color=SEVERITY_COLORS['Critical']
+        ))
+        fig.add_trace(go.Bar(
+            y=short_names, x=df_p['high'], name='High',
+            orientation='h', marker_color=SEVERITY_COLORS['High']
+        ))
+        fig.update_layout(
+            barmode='stack', template=template,
+            title=title if not for_pdf else None,
+            xaxis=dict(title='Vulnerability Count'),
+            yaxis=dict(type='category', automargin=True),
+            legend=dict(orientation='h', yanchor='top', y=-0.15,
+                        xanchor='center', x=0.5),
+        )
+        if chart_height:
+            fig.update_layout(height=chart_height)
+        if for_pdf:
+            fig.update_layout(margin=dict(l=40, r=40, t=20, b=80))
+        return fig
+
+    # ================================================================
+    # Posture & Compliance chart types
+    # ================================================================
+    elif chart_type == "posture_failures":
+        # Donut chart of failure distribution by owner
+        if not all(c in df.columns for c in ['Owner', 'Total Failures']):
+            return None
+        top_n = min(10, len(df))
+        top_df = df.head(top_n)
+        others = int(df.iloc[top_n:]['Total Failures'].sum()) if len(df) > top_n else 0
+        total = int(df['Total Failures'].sum())
+
+        labels = []
+        values = []
+        for _, row in top_df.iterrows():
+            owner = str(row['Owner'])[:20]
+            val = int(row['Total Failures'])
+            pct = (val / total * 100) if total > 0 else 0
+            labels.append(f"{owner} ({val:,}) - {pct:.1f}%")
+            values.append(val)
+
+        if others > 0:
+            pct = (others / total * 100) if total > 0 else 0
+            labels.append(f"Others ({others:,}) - {pct:.1f}%")
+            values.append(others)
+
+        fig = go.Figure(go.Pie(
+            labels=labels, values=values,
+            hole=0.4, textinfo='label', textposition='outside',
+            sort=False
+        ))
+        fig.add_annotation(
+            text=f"<b>{total:,}</b><br>Total",
+            x=0.5, y=0.5, font_size=15, showarrow=False
+        )
+        if not for_pdf and title:
+            fig.update_layout(title=dict(text=title), template=template)
+        else:
+            fig.update_layout(template=template)
+        if for_pdf:
+            fig.update_layout(showlegend=False, margin=dict(l=20, r=20, t=20, b=20))
+        return fig
+
+    elif chart_type == "posture_top_contributors":
+        # Horizontal bar of top N failure contributors
+        if not all(c in df.columns for c in ['Owner', 'Total Failures']):
+            return None
+        top_df = df.head(10).sort_values('Total Failures', ascending=True)
+
+        fig = px.bar(
+            top_df, x='Total Failures', y='Owner', orientation='h',
+            template=template, title=title if not for_pdf else None
+        )
+        fig.update_traces(marker_color='#d32f2f')
+        layout_opts = {"showlegend": False}
+        if chart_height:
+            layout_opts["height"] = chart_height
+        if for_pdf:
+            layout_opts["margin"] = dict(l=40, r=40, t=20, b=40)
+        fig.update_layout(**layout_opts)
+        return fig
+
+    elif chart_type == "posture_severity_by_owner":
+        # Stacked bar of severity breakdown per owner
+        if not all(c in df.columns for c in ['Owner', 'Control Severity', 'Count']):
+            return None
+
+        sev_colors = {
+            "High": SEVERITY_COLORS.get("High", "#ffa000"),
+            "Medium": SEVERITY_COLORS.get("Medium", "#388e3c"),
+            "Low": SEVERITY_COLORS.get("Low", "#1976d2"),
+            "Info": "#00bcd4",
+        }
+
+        fig = go.Figure()
+        for severity in ['High', 'Medium', 'Low', 'Info']:
+            sev_data = df[df['Control Severity'] == severity]
+            if not sev_data.empty:
+                fig.add_trace(go.Bar(
+                    name=severity,
+                    x=sev_data['Owner'].astype(str),
+                    y=sev_data['Count'],
+                    marker_color=sev_colors.get(severity, '#757575'),
+                ))
+
+        fig.update_layout(
+            barmode='stack', template=template,
+            title=title if not for_pdf else None,
+            xaxis=dict(tickangle=45, type='category'),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                        xanchor='right', x=1),
+        )
+        if chart_height:
+            fig.update_layout(height=chart_height)
+        if for_pdf:
+            fig.update_layout(margin=dict(l=40, r=40, t=20, b=80))
+        return fig
+
+    elif chart_type == "posture_heatmap":
+        # Heatmap of owner vs control failures
+        if not all(c in df.columns for c in ['Owner', 'Control Name', 'Count']):
+            return None
+
+        pivot = df.pivot_table(
+            index='Owner', columns='Control Name',
+            values='Count', fill_value=0
+        )
+
+        fig = go.Figure(data=go.Heatmap(
+            z=pivot.values,
+            x=[c[:40] + '...' if len(c) > 40 else c for c in pivot.columns],
+            y=[str(i) for i in pivot.index],
+            colorscale='Reds',
+            text=pivot.values,
+            texttemplate='%{text}',
+            textfont={"size": 10},
+        ))
+        fig.update_layout(
+            template=template,
+            title=title if not for_pdf else None,
+            height=chart_height or 600,
+            xaxis=dict(tickangle=45, tickfont=dict(size=9)),
+            yaxis=dict(tickfont=dict(size=10), type='category'),
+        )
+        if for_pdf:
+            fig.update_layout(margin=dict(l=40, r=40, t=20, b=80))
         return fig
 
     elif chart_type == "table":
@@ -264,6 +551,10 @@ def get_chart_dimensions(chart_type: str, width: int = 1200) -> tuple[int, int]:
     if chart_type == "traffic_lights":
         return width, TRAFFIC_LIGHT_CONFIG["height"]
     elif chart_type in ("history", "trend_summary"):
+        return width, int(width * 0.45)
+    elif chart_type == "posture_heatmap":
+        return width, int(width * 0.55)
+    elif chart_type in ("reg_top_images", "reg_patch_priority"):
         return width, int(width * 0.45)
     else:
         return width, int(width * 0.5)
