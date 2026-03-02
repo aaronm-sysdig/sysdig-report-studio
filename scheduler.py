@@ -4,6 +4,8 @@ Background scheduler for automated report generation.
 Runs as a daemon thread, checking every hour (by default) for any reports
 that are due to be generated. Keeps things ticking along without user intervention.
 """
+from __future__ import annotations
+
 import os
 import threading
 import time

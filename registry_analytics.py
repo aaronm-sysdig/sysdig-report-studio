@@ -4,6 +4,8 @@ Registry Vulnerability Analytics page for Sysdig Report Studio.
 Extracted from Prakash's sysdig-coding/app.py.
 Chart functions return go.Figure / dict-of-figures; render_page() handles all st.plotly_chart() calls.
 """
+from __future__ import annotations
+
 import json
 import os
 from datetime import datetime, timezone

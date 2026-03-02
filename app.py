@@ -75,7 +75,7 @@ elif tool == "🔍  Registry Vulnerabilities":
 elif tool == "📊  CVE Risk Overview":
     cve_risk.render_page()
 elif tool == "🔧  Engineering Fix View":
-    engineering_fix.render_page()
+    engineering_fix.render_page(api_token, region)
 else:
     report_studio.render_sidebar(api_token, region)
     report_studio.render_page(api_token, region, cust_name)

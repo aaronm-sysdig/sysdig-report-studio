@@ -4,6 +4,8 @@ Report Studio page for Sysdig Report Studio.
 Handles report design, preview, PDF scheduling, and template management.
 Extracted from app.py.
 """
+from __future__ import annotations
+
 import json
 import os
 import urllib.parse

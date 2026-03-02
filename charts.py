@@ -5,6 +5,8 @@ This module handles all the Plotly chart creation. It's shared between the live
 preview and PDF generation so everything looks consistent. If you change how a
 chart looks here, it'll update everywhere.
 """
+from __future__ import annotations
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go

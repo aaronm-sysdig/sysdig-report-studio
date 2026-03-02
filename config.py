@@ -3,6 +3,7 @@ Shared configuration for Sysdig Report Studio.
 
 Region mappings and API helpers used across all modules.
 """
+from __future__ import annotations
 from pathlib import Path
 import streamlit as st
 
