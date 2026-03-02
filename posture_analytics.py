@@ -286,7 +286,16 @@ def create_person_charts(df: pd.DataFrame, top_owners: pd.DataFrame, group_by: s
         all_controls = owner_df.groupby(['Control Name', 'Control Severity']).size().reset_index(name='Count')
         total_unique_controls = len(all_controls)
 
-        controls = all_controls.sort_values('Count', ascending=True).tail(8).reset_index(drop=True)
+        # Severity rank: High outranks everything regardless of count
+        sev_rank = {'High': 3, 'Medium': 2, 'Low': 1, 'Info': 0}
+        all_controls['_sev_rank'] = all_controls['Control Severity'].map(sev_rank).fillna(0)
+
+        # Pick top 8 prioritising severity first, then count within each tier
+        top8 = all_controls.sort_values(['_sev_rank', 'Count'], ascending=[False, False]).head(8)
+
+        # Re-sort for chart display: lowest rank at bottom, highest (High) at top
+        controls = top8.sort_values(['_sev_rank', 'Count'], ascending=[True, True]).reset_index(drop=True)
+        controls = controls.drop(columns='_sev_rank')
 
         severity_colors = {'High': '#e74c3c', 'Medium': '#f39c12', 'Low': '#3498db', 'Info': '#95a5a6'}
 
@@ -594,40 +603,39 @@ def render_page():
     st.title("Sysdig Posture Report Analytics")
     st.markdown("Upload your posture report CSV to generate executive and security dashboards.")
 
-    # Sidebar for file upload
-    with st.sidebar:
-        st.header("Upload Data")
-        st.markdown("**Drag & drop multiple files** to see trends over time")
+    # ── Upload + grouping inline ───────────────────────────────────────────────
+    up_col, grp_col = st.columns([3, 1], gap="large")
+
+    with up_col:
         uploaded_files = st.file_uploader(
-            "Choose CSV files",
+            "Upload posture report CSV(s) — drag & drop multiple files to see trends over time",
             type=['csv', 'gz', 'zip'],
             accept_multiple_files=True,
-            help="Upload one or more CSV/gzipped CSV/zip files. Multiple files enable trend analysis."
+            help="Upload one or more CSV/gzipped CSV/zip files. Multiple files enable trend analysis.",
+            key="posture_uploader",
         )
 
-        if uploaded_files:
-            st.success(f"Loaded {len(uploaded_files)} file(s)")
-            with st.expander("View uploaded files"):
-                for f in uploaded_files:
-                    date = extract_date_from_filename(f.name)
-                    st.text(f"  {f.name[:40]}... ({date.strftime('%Y-%m-%d')})")
-
-        st.header("Grouping Options")
+    with grp_col:
         group_by = st.selectbox(
             "Group failures by",
             options=['Zones', 'Account Id'],
             index=0,
-            help="Select how to group failures: by Zones (owner) or by Account Id"
+            help="Group failures by Zones (owner) or by Account Id",
+            key="posture_group_by",
         )
+        if uploaded_files:
+            st.success(f"{len(uploaded_files)} file(s) loaded")
+            with st.expander("Files"):
+                for f in uploaded_files:
+                    date = extract_date_from_filename(f.name)
+                    st.caption(f"{f.name[:35]} · {date.strftime('%Y-%m-%d')}")
 
     if not uploaded_files:
-        st.info("Please upload CSV file(s) using the sidebar to get started.")
-
         st.markdown("---")
         st.markdown("### How to use")
         st.markdown("""
         1. Export your posture report(s) from Sysdig as CSV
-        2. **Drag & drop** one or more files into the upload area
+        2. **Drag & drop** one or more files into the upload area above
         3. View the generated dashboards below
         4. **Upload multiple reports** from different dates to see failure trends over time
         5. Download summary reports as needed
@@ -722,16 +730,34 @@ def render_page():
         st.markdown("---")
         st.markdown("### Top 5 Contributors - What Controls to Fix First")
 
+        # Coloured severity pills — click to filter, click again to clear
         st.markdown("""
-        <div style="display: flex; gap: 20px; margin-bottom: 20px;">
-            <span><span style="background:#e74c3c; padding: 2px 10px; border-radius: 4px; color: white;">High</span></span>
-            <span><span style="background:#f39c12; padding: 2px 10px; border-radius: 4px; color: white;">Medium</span></span>
-            <span><span style="background:#3498db; padding: 2px 10px; border-radius: 4px; color: white;">Low</span></span>
-            <span><span style="background:#95a5a6; padding: 2px 10px; border-radius: 4px; color: white;">Info</span></span>
-        </div>
-        """, unsafe_allow_html=True)
+<style>
+/* Unselected pill colours */
+div[data-testid="stPills"] button:nth-child(1) { color:#e74c3c !important; border-color:#e74c3c !important; }
+div[data-testid="stPills"] button:nth-child(2) { color:#f39c12 !important; border-color:#f39c12 !important; }
+div[data-testid="stPills"] button:nth-child(3) { color:#3498db !important; border-color:#3498db !important; }
+div[data-testid="stPills"] button:nth-child(4) { color:#95a5a6 !important; border-color:#95a5a6 !important; }
+/* Selected pill — solid fill */
+div[data-testid="stPills"] button[aria-pressed="true"]:nth-child(1) { background:#e74c3c !important; color:#fff !important; }
+div[data-testid="stPills"] button[aria-pressed="true"]:nth-child(2) { background:#f39c12 !important; color:#fff !important; }
+div[data-testid="stPills"] button[aria-pressed="true"]:nth-child(3) { background:#3498db !important; color:#fff !important; }
+div[data-testid="stPills"] button[aria-pressed="true"]:nth-child(4) { background:#95a5a6 !important; color:#fff !important; }
+</style>
+""", unsafe_allow_html=True)
 
-        person_charts = create_person_charts(df, top_owners, group_by)
+        sev_filter = st.pills(
+            "Severity filter",
+            options=["High", "Medium", "Low", "Info"],
+            default=None,
+            label_visibility="collapsed",
+            key="posture_sev_pills",
+        )
+
+        # None = all severities; otherwise filter df to selected severity
+        df_for_charts = df if sev_filter is None else df[df['Control Severity'] == sev_filter]
+
+        person_charts = create_person_charts(df_for_charts, top_owners, group_by)
 
         cols = st.columns(2)
         for i, (owner, fig) in enumerate(person_charts):
