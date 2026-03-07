@@ -383,10 +383,10 @@ def render_page(api_token: str = "", region: str = "Asia Pacific (Sydney)"):
             st.session_state["bullish_app_base"] = app_base
         except Exception as exc:
             err_str = str(exc)
-            if "401" in err_str or "Unauthorized" in err_str:
+            if any(code in err_str for code in ("401", "403", "404", "Unauthorized", "Not Found")):
                 status_box.warning(
-                    f"401 Unauthorized for region **{region}**. "
-                    "Auto-detecting the correct region — probing all regions…"
+                    f"Cannot reach Reporting API on region **{region}** "
+                    f"({err_str[:80]}). Auto-detecting correct region…"
                 )
                 prog_bar.progress(5, text="Probing regions…")
                 detected = auto_detect_region(api_token)
