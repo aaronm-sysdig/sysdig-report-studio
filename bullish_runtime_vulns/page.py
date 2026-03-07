@@ -17,7 +17,20 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-API_BASE = "https://api.au1.sysdig.com"
+# Map sidebar region label → Vulnerability API base URL
+# Pattern: app.{region}.sysdig.com  →  api.{region}.sysdig.com
+# Exception: secure.sysdig.com (us1) → api.sysdig.com
+REGION_API_BASE: dict[str, str] = {
+    "US East (North Virginia)":    "https://api.sysdig.com",
+    "US West (Oregon, AWS)":       "https://api.us2.sysdig.com",
+    "US-3":                        "https://api.us3.sysdig.com",
+    "US West (Dallas, GCP)":       "https://api.us4.sysdig.com",
+    "EU Central (Frankfurt)":      "https://api.eu1.sysdig.com",
+    "EU North (Stockholm)":        "https://api.eu2.sysdig.com",
+    "Asia Pacific (Sydney)":       "https://api.au1.sysdig.com",
+    "Middle East (Dammam, GCP)":   "https://api.me2.sysdig.com",
+    "Asia Pacific South (Mumbai)": "https://api.in1.sysdig.com",
+}
 
 SEV_COL = {
     "Critical": "#D72638",
@@ -62,7 +75,26 @@ def _get(url: str, hdrs: dict, params: dict | None = None,
 
 # ── API ───────────────────────────────────────────────────────────────────────
 
-def fetch_findings(api_token: str) -> list[dict]:
+def auto_detect_region(api_token: str) -> tuple[str, str] | None:
+    """Probe all known API bases with a minimal request.
+
+    Returns (region_label, api_base) for the first region that responds 200,
+    or None if none succeed.
+    """
+    hdrs = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
+    probe = "/secure/vulnerability/v1/runtime-results"
+    params = {"limit": 1}
+    for label, base in REGION_API_BASE.items():
+        try:
+            r = requests.get(f"{base}{probe}", headers=hdrs, params=params, timeout=10)
+            if r.status_code == 200:
+                return label, base
+        except Exception:
+            continue
+    return None
+
+
+def fetch_findings(api_token: str, api_base: str) -> list[dict]:
     """Two-step Vulnerability API fetch.
 
     Step 1: GET /secure/vulnerability/v1/runtime-results
@@ -84,7 +116,7 @@ def fetch_findings(api_token: str) -> list[dict]:
         params: dict = {"limit": 100, "sort": "runningVulnTotalBySeverity", "order": "desc"}
         if cursor:
             params["cursor"] = cursor
-        body  = _get(f"{API_BASE}/secure/vulnerability/v1/runtime-results", hdrs, params=params).json()
+        body  = _get(f"{api_base}/secure/vulnerability/v1/runtime-results", hdrs, params=params).json()
         batch = body.get("data", [])
         has_vulns = [
             e for e in batch
@@ -112,7 +144,7 @@ def fetch_findings(api_token: str) -> list[dict]:
             continue
         if result_id not in result_cache:
             result_cache[result_id] = _get(
-                f"{API_BASE}/secure/vulnerability/v1/results/{result_id}", hdrs
+                f"{api_base}/secure/vulnerability/v1/results/{result_id}", hdrs
             ).json()
 
         result = result_cache[result_id]
@@ -284,6 +316,12 @@ def render_page(api_token: str = "", region: str = "au1"):
         st.warning("Enter your API token in the sidebar to fetch live data.")
         return
 
+    # Derive API base from the selected region label; fall back to au1
+    api_base = REGION_API_BASE.get(region, "https://api.au1.sysdig.com")
+    # If a previous auto-detect cached a working base, honour it
+    if "bullish_api_base" in st.session_state:
+        api_base = st.session_state["bullish_api_base"]
+
     col_btn, col_note = st.columns([1, 4])
     with col_btn:
         refresh = st.button("🔄 Fetch / Refresh", type="primary", use_container_width=True)
@@ -293,15 +331,45 @@ def render_page(api_token: str = "", region: str = "au1"):
 
     if refresh:
         st.session_state.pop("bullish_data", None)
+        st.session_state.pop("bullish_api_base", None)
+        api_base = REGION_API_BASE.get(region, "https://api.au1.sysdig.com")
 
     if "bullish_data" not in st.session_state:
         with st.spinner("Fetching runtime vulnerability data from Sysdig API…"):
             try:
-                rows = fetch_findings(api_token)
+                rows = fetch_findings(api_token, api_base)
                 st.session_state["bullish_data"] = rows
+                st.session_state["bullish_api_base"] = api_base
             except Exception as exc:
-                st.error(f"API error: {exc}")
-                return
+                err_str = str(exc)
+                if "401" in err_str or "Unauthorized" in err_str:
+                    st.warning(
+                        f"401 Unauthorized for region **{region}**. "
+                        "Auto-detecting the correct region — this may take a few seconds…"
+                    )
+                    detected = auto_detect_region(api_token)
+                    if detected:
+                        det_label, det_base = detected
+                        st.success(
+                            f"Found working region: **{det_label}** (`{det_base}`). "
+                            "Retrying fetch…"
+                        )
+                        st.session_state["bullish_api_base"] = det_base
+                        try:
+                            rows = fetch_findings(api_token, det_base)
+                            st.session_state["bullish_data"] = rows
+                        except Exception as exc2:
+                            st.error(f"API error after auto-detect: {exc2}")
+                            return
+                    else:
+                        st.error(
+                            "Could not find a working region for this token. "
+                            "Please verify your API token is correct."
+                        )
+                        return
+                else:
+                    st.error(f"API error: {exc}")
+                    return
 
     rows: list[dict] = st.session_state.get("bullish_data", [])
     if not rows:
