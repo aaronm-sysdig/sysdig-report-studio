@@ -1,14 +1,16 @@
 """Bullish — Runtime Vulnerability Findings Dashboard
 
-Fetches in-use + exploitable workload vulnerabilities directly from the
-Sysdig Vulnerability API (two-step pattern, read-only GET requests only).
+Data source: Sysdig Reporting v2 API
+  Schedule: "PG - K8 Workload Vulnerability Findings"
+  Endpoint: GET /api/scanning/reporting/v2/schedules/{id}/download  →  CSV
 
-Filters applied server-side:
-  - isRunning == True   (package actively executing at runtime)
-  - exploitable == True (known public exploit exists)
+Filter applied locally:
+  - In Use == true  (package actively executing at runtime)
 
 Grouping: image-centric — one expandable ticket per unique container image.
 """
+import csv
+import io
 import time
 from collections import defaultdict
 
@@ -17,19 +19,19 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-# Map sidebar region label → Vulnerability API base URL
-# Pattern: app.{region}.sysdig.com  →  api.{region}.sysdig.com
-# Exception: secure.sysdig.com (us1) → api.sysdig.com
-REGION_API_BASE: dict[str, str] = {
-    "US East (North Virginia)":    "https://api.sysdig.com",
-    "US West (Oregon, AWS)":       "https://api.us2.sysdig.com",
-    "US-3":                        "https://api.us3.sysdig.com",
-    "US West (Dallas, GCP)":       "https://api.us4.sysdig.com",
-    "EU Central (Frankfurt)":      "https://api.eu1.sysdig.com",
-    "EU North (Stockholm)":        "https://api.eu2.sysdig.com",
-    "Asia Pacific (Sydney)":       "https://api.au1.sysdig.com",
-    "Middle East (Dammam, GCP)":   "https://api.me2.sysdig.com",
-    "Asia Pacific South (Mumbai)": "https://api.in1.sysdig.com",
+REPORT_SCHEDULE_NAME = "PG - K8 Workload Vulnerability Findings"
+
+# Map sidebar region label → Reporting v2 API base URL (app. hostnames)
+REGION_APP_BASE: dict[str, str] = {
+    "US East (North Virginia)":    "https://secure.sysdig.com",
+    "US West (Oregon, AWS)":       "https://app.us2.sysdig.com",
+    "US-3":                        "https://app.us3.sysdig.com",
+    "US West (Dallas, GCP)":       "https://app.us4.sysdig.com",
+    "EU Central (Frankfurt)":      "https://eu1.app.sysdig.com",
+    "EU North (Stockholm)":        "https://app.eu2.sysdig.com",
+    "Asia Pacific (Sydney)":       "https://app.au1.sysdig.com",
+    "Middle East (Dammam, GCP)":   "https://app.me2.sysdig.com",
+    "Asia Pacific South (Mumbai)": "https://app.in1.sysdig.com",
 }
 
 SEV_COL = {
@@ -76,120 +78,134 @@ def _get(url: str, hdrs: dict, params: dict | None = None,
 # ── API ───────────────────────────────────────────────────────────────────────
 
 def auto_detect_region(api_token: str) -> tuple[str, str] | None:
-    """Probe all known API bases with a minimal request.
+    """Probe all known app base URLs with a schedules list request.
 
-    Returns (region_label, api_base) for the first region that responds 200,
-    or None if none succeed.
+    Returns (region_label, app_base) for the first region that returns a
+    valid JSON schedules response, or None if none succeed.
     """
     hdrs = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
-    probe = "/secure/vulnerability/v1/runtime-results"
-    params = {"limit": 1}
-    for label, base in REGION_API_BASE.items():
+    probe = "/api/scanning/reporting/v2/schedules"
+    for label, base in REGION_APP_BASE.items():
         try:
-            r = requests.get(f"{base}{probe}", headers=hdrs, params=params, timeout=10)
-            if r.status_code == 200:
-                return label, base
+            r = requests.get(f"{base}{probe}", headers=hdrs, timeout=10)
+            if r.status_code == 200 and r.content:
+                try:
+                    body = r.json()
+                    # Response is a list of schedule objects or {"data": [...]}
+                    if isinstance(body, list) or isinstance(body, dict):
+                        return label, base
+                except Exception:
+                    pass   # HTML or non-JSON — skip
         except Exception:
             continue
     return None
 
 
-def fetch_findings(api_token: str, api_base: str) -> list[dict]:
-    """Two-step Vulnerability API fetch.
+def _col(row: dict, *candidates: str, default: str = "") -> str:
+    """Return the first matching column value from a CSV row (case-insensitive)."""
+    low = {k.lower(): v for k, v in row.items()}
+    for c in candidates:
+        v = low.get(c.lower())
+        if v is not None:
+            return v
+    return default
 
-    Step 1: GET /secure/vulnerability/v1/runtime-results
-            Paginated, sorted desc by runningVulnTotalBySeverity.
-            Early-stop when a batch hits zero-vuln entries.
 
-    Step 2: GET /secure/vulnerability/v1/results/{resultId}
-            Per-image CVE details, deduped by resultId.
+def fetch_findings(api_token: str, app_base: str,
+                   status_cb=None) -> list[dict]:
+    """Fetch vulnerability findings from the Sysdig Reporting v2 API.
 
-    Returns a flat list of finding dicts (one row per in-use exploitable CVE
-    × workload combination).
+    Step 1: GET /api/scanning/reporting/v2/schedules
+            Find the schedule named REPORT_SCHEDULE_NAME, extract its ID.
+
+    Step 2: GET /api/scanning/reporting/v2/schedules/{id}/download
+            Download the latest generated CSV report.
+
+    Step 3: Parse CSV rows, filter to In Use == true, map to internal format.
+
+    status_cb(msg): optional callable to push live status text to the UI.
     """
-    hdrs = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
+    def _status(msg: str):
+        if status_cb:
+            status_cb(msg)
 
-    # ── Step 1: collect (image × workload) entries with running vulns ─────────
-    entries: list[dict] = []
-    cursor = None
-    while True:
-        params: dict = {"limit": 100, "sort": "runningVulnTotalBySeverity", "order": "desc"}
-        if cursor:
-            params["cursor"] = cursor
-        body  = _get(f"{api_base}/secure/vulnerability/v1/runtime-results", hdrs, params=params).json()
-        batch = body.get("data", [])
-        has_vulns = [
-            e for e in batch
-            if sum((e.get("runningVulnTotalBySeverity") or {}).values()) > 0
-        ]
-        entries.extend(has_vulns)
-        cursor = body.get("page", {}).get("next")
-        if not cursor or not batch or len(has_vulns) < len(batch):
-            break   # reached the zero-vuln tail
+    hdrs_json = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
 
-    # ── Step 2: fetch CVE details per unique resultId ─────────────────────────
-    result_cache: dict = {}
+    # ── Step 1: find the schedule ──────────────────────────────────────────────
+    _status(f"Step 1 — searching for report schedule '{REPORT_SCHEDULE_NAME}'…")
+    r1 = _get(f"{app_base}/api/scanning/reporting/v2/schedules", hdrs_json)
+    try:
+        body = r1.json() if r1.content else []
+    except Exception:
+        raise RuntimeError(
+            f"Non-JSON response from schedules endpoint "
+            f"(status {r1.status_code}): {r1.text[:300]!r}"
+        )
+
+    # Response may be a plain list or {"data": [...]}
+    schedule_list = body if isinstance(body, list) else body.get("data", [])
+    schedule_id = None
+    for s in schedule_list:
+        if s.get("name") == REPORT_SCHEDULE_NAME:
+            schedule_id = s.get("id") or s.get("scheduleId")
+            break
+
+    if not schedule_id:
+        names = [s.get("name", "") for s in schedule_list[:20]]
+        raise RuntimeError(
+            f"Schedule '{REPORT_SCHEDULE_NAME}' not found. "
+            f"Schedules visible in this account: {names}"
+        )
+
+    # ── Step 2: download the CSV ───────────────────────────────────────────────
+    _status(f"Step 2 — downloading CSV report (schedule {schedule_id})…")
+    hdrs_csv = {**hdrs_json, "Accept": "text/csv,application/octet-stream,*/*"}
+    r2 = _get(
+        f"{app_base}/api/scanning/reporting/v2/schedules/{schedule_id}/download",
+        hdrs_csv,
+    )
+    if not r2.content:
+        raise RuntimeError(
+            "CSV download returned an empty file. "
+            "The schedule may not have run yet — trigger a run in Reports Manager first."
+        )
+
+    # ── Step 3: parse CSV, filter in-use, map columns ─────────────────────────
+    _status("Step 3 — parsing CSV and filtering in-use findings…")
+    reader = csv.DictReader(io.StringIO(r2.text))
     rows: list[dict] = []
 
-    for entry in entries:
-        result_id = entry.get("resultId", "")
-        img_name  = entry.get("mainAssetName", "")
-        scope     = entry.get("scope", {})
-        wl        = scope.get("kubernetes.workload.name", "")
-        ns        = scope.get("kubernetes.namespace.name", "")
-        cl        = scope.get("kubernetes.cluster.name", "")
-        wl_type   = scope.get("kubernetes.workload.type", "")
-
-        if not result_id:
-            continue
-        if result_id not in result_cache:
-            result_cache[result_id] = _get(
-                f"{api_base}/secure/vulnerability/v1/results/{result_id}", hdrs
-            ).json()
-
-        result = result_cache[result_id]
-        if not result:
+    for raw in reader:
+        in_use_val = _col(raw, "In Use", "isRunning", "in_use", "running").lower()
+        if in_use_val not in ("true", "yes", "1"):
             continue
 
-        packages        = result.get("packages", {})
-        vulnerabilities = result.get("vulnerabilities", {})
+        fix_ver  = _col(raw, "Fix Version", "fixVersion", "fix_version")
+        cvss_str = _col(raw, "CVSS Score", "cvssScore", "cvss_score", "CVSS")
+        try:
+            cvss = float(cvss_str)
+        except (ValueError, TypeError):
+            cvss = 0.0
+        sev = _col(raw, "Vulnerability Severity", "Severity", "severity").capitalize()
 
-        for v in vulnerabilities.values():
-            pkg_id = v.get("packageRef", "")
-            pkg    = packages.get(pkg_id, {})
-            if not pkg.get("isRunning") or not v.get("exploitable"):
-                continue
+        rows.append({
+            "Severity":    sev,
+            "CVE":         _col(raw, "Vulnerability Name", "CVE", "cve", "vulnerability_name"),
+            "Fix":         bool(fix_ver),
+            "Workload":    _col(raw, "Kubernetes Workload Name", "Workload Name", "workload"),
+            "Namespace":   _col(raw, "Kubernetes Namespace Name", "Namespace", "namespace"),
+            "Cluster":     _col(raw, "Kubernetes Cluster Name", "Cluster", "cluster"),
+            "WorkloadType": _col(raw, "Kubernetes Workload Type", "Workload Type", "workload_type"),
+            "CVSS":        cvss,
+            "Image":       _col(raw, "Image Name", "Image", "image_name", "image"),
+            "Package":     _col(raw, "Package Name", "Package", "package_name"),
+            "PkgType":     _col(raw, "Package Type", "package_type", "pkg_type"),
+            "FixVersion":  fix_ver,
+            "KEV":         _col(raw, "CISA KEV Publish Date", "cisa_kev_publish_date", "KEV"),
+            "KEVDue":      _col(raw, "CISA KEV Due Date", "cisa_kev_due_date"),
+        })
 
-            sev     = (v.get("severity") or "").capitalize()
-            cvss    = (v.get("cvssScore") or {}).get("score", 0.0)
-            fix_ver = v.get("fixVersion") or ""
-            kev     = (v.get("cisaKev") or {})
-
-            pt_raw = (pkg.get("type") or "").lower()
-            if "go" in pt_raw:
-                pkg_type = "Golang"
-            elif pt_raw in ("java", "maven", "gradle"):
-                pkg_type = "Java"
-            else:
-                pkg_type = "OS"
-
-            rows.append({
-                "Severity":    sev,
-                "CVE":         v.get("name", ""),
-                "Fix":         bool(fix_ver),
-                "Workload":    wl,
-                "Namespace":   ns,
-                "Cluster":     cl,
-                "WorkloadType": wl_type,
-                "CVSS":        cvss,
-                "Image":       img_name,
-                "Package":     pkg.get("name", ""),
-                "PkgType":     pkg_type,
-                "FixVersion":  fix_ver,
-                "KEV":         kev.get("dateAdded", ""),
-                "KEVDue":      kev.get("dueDate", ""),
-            })
-
+    _status(f"Done — {len(rows)} in-use findings loaded.")
     return rows
 
 
@@ -304,23 +320,23 @@ def _blast_radius_chart(sorted_cves: list, cve_img_count: dict) -> go.Figure:
 
 # ── Page entry point ──────────────────────────────────────────────────────────
 
-def render_page(api_token: str = "", region: str = "au1"):
+def render_page(api_token: str = "", region: str = "Asia Pacific (Sydney)"):
     """Main Streamlit page for Bullish Runtime Vulnerability Findings."""
     st.markdown("## Bullish — Runtime Vulnerability Findings")
     st.caption(
-        "Filters: **in-use** (package actively running at runtime) "
-        "+ **exploitable** (known public exploit) · Image-centric grouping"
+        f"Source: **{REPORT_SCHEDULE_NAME}** · "
+        "Filter: **In Use** (package actively running at runtime) · Image-centric grouping"
     )
 
     if not api_token:
         st.warning("Enter your API token in the sidebar to fetch live data.")
         return
 
-    # Derive API base from the selected region label; fall back to au1
-    api_base = REGION_API_BASE.get(region, "https://api.au1.sysdig.com")
+    # Derive app base from the selected region label; fall back to au1
+    app_base = REGION_APP_BASE.get(region, "https://app.au1.sysdig.com")
     # If a previous auto-detect cached a working base, honour it
-    if "bullish_api_base" in st.session_state:
-        api_base = st.session_state["bullish_api_base"]
+    if "bullish_app_base" in st.session_state:
+        app_base = st.session_state["bullish_app_base"]
 
     col_btn, col_note = st.columns([1, 4])
     with col_btn:
@@ -331,49 +347,80 @@ def render_page(api_token: str = "", region: str = "au1"):
 
     if refresh:
         st.session_state.pop("bullish_data", None)
-        st.session_state.pop("bullish_api_base", None)
-        api_base = REGION_API_BASE.get(region, "https://api.au1.sysdig.com")
+        st.session_state.pop("bullish_app_base", None)
+        app_base = REGION_APP_BASE.get(region, "https://app.au1.sysdig.com")
 
     if "bullish_data" not in st.session_state:
-        with st.spinner("Fetching runtime vulnerability data from Sysdig API…"):
-            try:
-                rows = fetch_findings(api_token, api_base)
-                st.session_state["bullish_data"] = rows
-                st.session_state["bullish_api_base"] = api_base
-            except Exception as exc:
-                err_str = str(exc)
-                if "401" in err_str or "Unauthorized" in err_str:
-                    st.warning(
-                        f"401 Unauthorized for region **{region}**. "
-                        "Auto-detecting the correct region — this may take a few seconds…"
+        status_box = st.empty()
+        prog_bar   = st.progress(0, text="Starting…")
+
+        def update_status(msg: str):
+            status_box.info(f"⏳ {msg}")
+            if "Step 1" in msg and "searching" in msg:
+                prog_bar.progress(10, text=msg)
+            elif "Step 2" in msg:
+                prog_bar.progress(50, text=msg)
+            elif "Step 3" in msg:
+                prog_bar.progress(80, text=msg)
+            elif "Done" in msg:
+                prog_bar.progress(100, text=msg)
+
+        def _run_fetch(base: str) -> list[dict]:
+            return fetch_findings(api_token, base, status_cb=update_status)
+
+        try:
+            update_status(f"Connecting to {app_base}…")
+            rows = _run_fetch(app_base)
+            prog_bar.progress(100, text="Done!")
+            status_box.empty()
+            prog_bar.empty()
+            st.session_state["bullish_data"] = rows
+            st.session_state["bullish_app_base"] = app_base
+        except Exception as exc:
+            err_str = str(exc)
+            if "401" in err_str or "Unauthorized" in err_str:
+                status_box.warning(
+                    f"401 Unauthorized for region **{region}**. "
+                    "Auto-detecting the correct region — probing all regions…"
+                )
+                prog_bar.progress(5, text="Probing regions…")
+                detected = auto_detect_region(api_token)
+                if detected:
+                    det_label, det_base = detected
+                    status_box.success(
+                        f"Found working region: **{det_label}** (`{det_base}`). "
+                        "Retrying fetch…"
                     )
-                    detected = auto_detect_region(api_token)
-                    if detected:
-                        det_label, det_base = detected
-                        st.success(
-                            f"Found working region: **{det_label}** (`{det_base}`). "
-                            "Retrying fetch…"
-                        )
-                        st.session_state["bullish_api_base"] = det_base
-                        try:
-                            rows = fetch_findings(api_token, det_base)
-                            st.session_state["bullish_data"] = rows
-                        except Exception as exc2:
-                            st.error(f"API error after auto-detect: {exc2}")
-                            return
-                    else:
-                        st.error(
-                            "Could not find a working region for this token. "
-                            "Please verify your API token is correct."
-                        )
+                    prog_bar.progress(15, text=f"Fetching from {det_base}…")
+                    st.session_state["bullish_app_base"] = det_base
+                    try:
+                        rows = _run_fetch(det_base)
+                        prog_bar.progress(100, text="Done!")
+                        status_box.empty()
+                        prog_bar.empty()
+                        st.session_state["bullish_data"] = rows
+                    except Exception as exc2:
+                        status_box.empty()
+                        prog_bar.empty()
+                        st.error(f"API error after auto-detect: {exc2}")
                         return
                 else:
-                    st.error(f"API error: {exc}")
+                    status_box.empty()
+                    prog_bar.empty()
+                    st.error(
+                        "Could not find a working region for this token. "
+                        "Please verify your API token is correct."
+                    )
                     return
+            else:
+                status_box.empty()
+                prog_bar.empty()
+                st.error(f"API error: {exc}")
+                return
 
     rows: list[dict] = st.session_state.get("bullish_data", [])
     if not rows:
-        st.info("No in-use exploitable findings returned by the API.")
+        st.info("No in-use findings found in the report. The schedule may not have run yet.")
         return
 
     D = aggregate(rows)
