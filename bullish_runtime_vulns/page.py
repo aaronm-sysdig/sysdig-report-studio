@@ -84,15 +84,14 @@ def auto_detect_region(api_token: str) -> tuple[str, str] | None:
     valid JSON schedules response, or None if none succeed.
     """
     hdrs = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
-    probe = "/api/scanning/reporting/v2/schedules"
+    probe = "/api/scanning/reporting/v2/reports"
     for label, base in REGION_APP_BASE.items():
         try:
             r = requests.get(f"{base}{probe}", headers=hdrs, timeout=10)
             if r.status_code == 200 and r.content:
                 try:
                     body = r.json()
-                    # Response is a list of schedule objects or {"data": [...]}
-                    if isinstance(body, list) or isinstance(body, dict):
+                    if isinstance(body, (list, dict)):
                         return label, base
                 except Exception:
                     pass   # HTML or non-JSON — skip
@@ -131,31 +130,37 @@ def fetch_findings(api_token: str, app_base: str,
 
     hdrs_json = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
 
-    # ── Step 1: find the schedule ──────────────────────────────────────────────
-    _status(f"Step 1 — searching for report schedule '{REPORT_SCHEDULE_NAME}'…")
-    r1 = _get(f"{app_base}/api/scanning/reporting/v2/schedules", hdrs_json)
-    try:
-        body = r1.json() if r1.content else []
-    except Exception:
-        raise RuntimeError(
-            f"Non-JSON response from schedules endpoint "
-            f"(status {r1.status_code}): {r1.text[:300]!r}"
-        )
+    # ── Step 1: find the report template by name, then get its schedule ────────
+    _status(f"Step 1 — searching for report '{REPORT_SCHEDULE_NAME}'…")
 
-    # Response may be a plain list or {"data": [...]}
-    schedule_list = body if isinstance(body, list) else body.get("data", [])
-    schedule_id = None
-    for s in schedule_list:
-        if s.get("name") == REPORT_SCHEDULE_NAME:
-            schedule_id = s.get("id") or s.get("scheduleId")
+    def _parse_list(r):
+        body = r.json() if r.content else []
+        return body if isinstance(body, list) else body.get("data", [])
+
+    reports = _parse_list(_get(f"{app_base}/api/scanning/reporting/v2/reports", hdrs_json))
+    report_id = None
+    for rpt in reports:
+        if rpt.get("name") == REPORT_SCHEDULE_NAME:
+            report_id = rpt.get("id")
             break
 
-    if not schedule_id:
-        names = [s.get("name", "") for s in schedule_list[:20]]
+    if not report_id:
+        names = [r.get("name", "") for r in reports[:20]]
         raise RuntimeError(
-            f"Schedule '{REPORT_SCHEDULE_NAME}' not found. "
-            f"Schedules visible in this account: {names}"
+            f"Report '{REPORT_SCHEDULE_NAME}' not found in this account. "
+            f"Reports visible: {names}"
         )
+
+    _status(f"Step 1 — found report {report_id}, looking up its schedule…")
+    schedules = _parse_list(
+        _get(f"{app_base}/api/scanning/reporting/v2/reports/{report_id}/schedules", hdrs_json)
+    )
+    if not schedules:
+        raise RuntimeError(
+            f"Report '{REPORT_SCHEDULE_NAME}' has no schedules. "
+            "Add a schedule in Reports Manager and wait for it to run."
+        )
+    schedule_id = schedules[0].get("id") or schedules[0].get("scheduleId")
 
     # ── Step 2: download the CSV ───────────────────────────────────────────────
     _status(f"Step 2 — downloading CSV report (schedule {schedule_id})…")
