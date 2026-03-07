@@ -11,6 +11,7 @@ import registry_analytics
 import cve_risk
 import engineering_fix
 import report_studio
+import bullish_runtime_vulns.page as bullish_page
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -61,6 +62,7 @@ with st.sidebar:
             "📊  CVE Risk Overview",
             "🔧  Engineering Fix View",
             "📄  Report Studio",
+            "🔥  Bullish Runtime Vulns",
         ],
         index=0,
     )
@@ -76,6 +78,8 @@ elif tool == "📊  CVE Risk Overview":
     cve_risk.render_page()
 elif tool == "🔧  Engineering Fix View":
     engineering_fix.render_page(api_token, region)
+elif tool == "🔥  Bullish Runtime Vulns":
+    bullish_page.render_page(api_token, region)
 else:
     report_studio.render_sidebar(api_token, region)
     report_studio.render_page(api_token, region, cust_name)
