@@ -10,14 +10,14 @@ import streamlit as st
 # Region to hostname mapping
 SYSDIG_REGIONS = {
     "US East (North Virginia)":    "secure.sysdig.com",
-    "US West (Oregon, AWS)":       "app.us2.sysdig.com",
-    "US-3":                        "app.us3.sysdig.com",
-    "US West (Dallas, GCP)":       "app.us4.sysdig.com",
+    "US West (Oregon, AWS)":       "us2.app.sysdig.com",
+    "US-3":                        "us3.app.sysdig.com",
+    "US West (Dallas, GCP)":       "us4.app.sysdig.com",
     "EU Central (Frankfurt)":      "eu1.app.sysdig.com",
-    "EU North (Stockholm)":        "app.eu2.sysdig.com",
-    "Asia Pacific (Sydney)":       "app.au1.sysdig.com",
-    "Middle East (Dammam, GCP)":   "app.me2.sysdig.com",
-    "Asia Pacific South (Mumbai)": "app.in1.sysdig.com",
+    "EU North (Stockholm)":        "eu2.app.sysdig.com",
+    "Asia Pacific (Sydney)":       "au1.app.sysdig.com",
+    "Middle East (Dammam, GCP)":   "me2.app.sysdig.com",
+    "Asia Pacific South (Mumbai)": "in1.app.sysdig.com",
 }
 
 # Directory for storing registry vulnerability snapshots

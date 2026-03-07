@@ -24,14 +24,14 @@ REPORT_SCHEDULE_NAME = "PG - K8 Workload Vulnerability Findings"
 # Map sidebar region label → Reporting v2 API base URL (app. hostnames)
 REGION_APP_BASE: dict[str, str] = {
     "US East (North Virginia)":    "https://secure.sysdig.com",
-    "US West (Oregon, AWS)":       "https://app.us2.sysdig.com",
-    "US-3":                        "https://app.us3.sysdig.com",
-    "US West (Dallas, GCP)":       "https://app.us4.sysdig.com",
+    "US West (Oregon, AWS)":       "https://us2.app.sysdig.com",
+    "US-3":                        "https://us3.app.sysdig.com",
+    "US West (Dallas, GCP)":       "https://us4.app.sysdig.com",
     "EU Central (Frankfurt)":      "https://eu1.app.sysdig.com",
-    "EU North (Stockholm)":        "https://app.eu2.sysdig.com",
-    "Asia Pacific (Sydney)":       "https://app.au1.sysdig.com",
-    "Middle East (Dammam, GCP)":   "https://app.me2.sysdig.com",
-    "Asia Pacific South (Mumbai)": "https://app.in1.sysdig.com",
+    "EU North (Stockholm)":        "https://eu2.app.sysdig.com",
+    "Asia Pacific (Sydney)":       "https://au1.app.sysdig.com",
+    "Middle East (Dammam, GCP)":   "https://me2.app.sysdig.com",
+    "Asia Pacific South (Mumbai)": "https://in1.app.sysdig.com",
 }
 
 SEV_COL = {
