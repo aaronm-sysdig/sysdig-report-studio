@@ -1,9 +1,7 @@
 """Bullish — Runtime Vulnerability Findings Dashboard
 
-Two data source modes:
-  1. Upload / Local file  — drop a .csv.gz export or pick from data/reports/
-  2. Fetch from API       — triggers an on-demand Sysdig Reporting job using
-                            the global API token + region configured in the sidebar
+Fetches the [PG] K8 Workload Vulnerability Findings report on-demand via
+the Sysdig Reporting API using the global API token.
 
 Filter applied: Package In Use == true (actively executing at runtime)
 Grouping: image-centric — one expandable ticket per unique container image.
@@ -17,7 +15,6 @@ import shutil
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import IO, List, Optional, Tuple
 
 import pandas as pd
@@ -29,7 +26,6 @@ from config import SYSDIG_REGIONS
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-DATA_DIR = Path(__file__).parent.parent / "data" / "reports"
 REPORT_NAME = "[PG] K8 Workload Vulnerability Findings"
 REPORTING_API = "/api/platform/reporting/v1"
 
@@ -68,12 +64,6 @@ def _col(row: dict, *candidates: str, default: str = "") -> str:
     return default
 
 
-def list_report_files() -> List[Path]:
-    if not DATA_DIR.exists():
-        return []
-    return sorted(DATA_DIR.glob("*.csv.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
-
-
 def _parse_findings(fileobj: IO) -> List[dict]:
     """Parse an open file-like object (text mode) of a Sysdig vulnerability CSV."""
     reader = csv.DictReader(fileobj)
@@ -108,13 +98,7 @@ def _parse_findings(fileobj: IO) -> List[dict]:
     return rows
 
 
-def fetch_findings_from_path(path: Path) -> List[dict]:
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt", encoding="utf-8") as f:
-        return _parse_findings(f)
-
-
-def fetch_findings_from_bytes(data: bytes, filename: str) -> List[dict]:
+def _fetch_findings_from_bytes(data: bytes, filename: str) -> List[dict]:
     if filename.endswith(".gz"):
         with gzip.open(io.BytesIO(data), "rt", encoding="utf-8") as f:
             return _parse_findings(f)
@@ -132,7 +116,7 @@ def _auto_detect_base_url(token: str) -> Optional[str]:
     for host in SYSDIG_REGIONS.values():
         base_url = f"https://{host}"
         try:
-            r = requests.get(f"{base_url}/api/v1/me", headers=headers, timeout=6)
+            r = requests.get(f"{base_url}/api/platform/reporting/v1/reports", headers=headers, timeout=6)
             if r.status_code == 200:
                 st.session_state[cache_key] = base_url
                 return base_url
@@ -244,13 +228,8 @@ def fetch_findings_from_api(base_url: str, token: str) -> Tuple[List[dict], str]
     raw.seek(0)
     data = raw.read()
 
-    # Optionally cache to disk
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    cache_path = DATA_DIR / f"{REPORT_NAME}_{ts}.csv.gz"
-    cache_path.write_bytes(data)
-
-    rows = fetch_findings_from_bytes(data, "report.csv.gz")
+    rows = _fetch_findings_from_bytes(data, "report.csv.gz")
     label = f"API fetch — {report_name} ({ts})"
     return rows, label
 
@@ -365,113 +344,49 @@ def render_page(*_args, **_kwargs):
         "Filter: **Package In Use** (actively running at runtime) · Image-centric grouping"
     )
 
-    # ── Data source selection ──────────────────────────────────────────────────
-    mode = st.radio(
-        "Data source",
-        ["Upload / Local file", "Fetch from Sysdig API"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-
     rows: List[dict] = []
-    source_label = ""
 
-    # ── Mode 1: Upload / Local file ────────────────────────────────────────────
-    if mode == "Upload / Local file":
-        uploaded = st.file_uploader(
-            "Upload a Sysdig vulnerability CSV export (.csv or .csv.gz)",
-            type=["csv", "gz"],
-            key="bullish_upload",
-        )
+    # ── Fetch from Sysdig API ──────────────────────────────────────────────────
+    token = st.session_state.get("global_api_token", "")
+    if not token:
+        st.warning("No API token configured. Enter your API token in the sidebar.")
+        return
 
-        local_files = list_report_files()
-        selected_local: Optional[Path] = None
-        if local_files:
-            file_names   = ["— select —"] + [f.name for f in local_files]
-            selected_name = st.selectbox("…or pick a cached file", file_names, index=0)
-            if selected_name != "— select —":
-                selected_local = DATA_DIR / selected_name
+    with st.spinner("Detecting region…"):
+        base_url = _auto_detect_base_url(token)
+    if not base_url:
+        st.warning("Could not detect your Sysdig region. Check that your token is valid.")
+        return
 
-        col_btn, col_note = st.columns([1, 4])
-        with col_btn:
-            load = st.button("Load / Refresh", type="primary", use_container_width=True)
-        with col_note:
-            if "bullish_label" in st.session_state:
-                st.caption(f"Loaded: {st.session_state['bullish_label']}")
+    st.caption(f"Region auto-detected: `{base_url}` · Report: `{REPORT_NAME}`")
 
-        trigger = load or (
-            "bullish_data" not in st.session_state
-            and (uploaded is not None or selected_local is not None)
-        )
+    col_btn, col_note = st.columns([1, 4])
+    with col_btn:
+        fetch_btn = st.button("Fetch from API", type="primary", use_container_width=True)
+    with col_note:
+        if "bullish_label" in st.session_state:
+            st.caption(f"Last loaded: {st.session_state['bullish_label']}")
 
-        if trigger:
-            if uploaded is not None:
-                with st.spinner("Parsing uploaded file…"):
-                    try:
-                        data = uploaded.read()
-                        rows = fetch_findings_from_bytes(data, uploaded.name)
-                        source_label = f"Upload: {uploaded.name}"
-                        st.session_state["bullish_data"]  = rows
-                        st.session_state["bullish_label"] = source_label
-                    except Exception as exc:
-                        st.error(f"Failed to parse upload: {exc}")
-                        return
-            elif selected_local is not None:
-                with st.spinner("Parsing local file…"):
-                    try:
-                        rows = fetch_findings_from_path(selected_local)
-                        source_label = f"Local: {selected_local.name}"
-                        st.session_state["bullish_data"]  = rows
-                        st.session_state["bullish_label"] = source_label
-                    except Exception as exc:
-                        st.error(f"Failed to load file: {exc}")
-                        return
-            elif "bullish_data" not in st.session_state:
-                st.info("Select a file above or upload one to load data.")
+    if fetch_btn:
+        with st.spinner("Connecting to Sysdig Reports Manager…"):
+            try:
+                rows, label = fetch_findings_from_api(base_url, token)
+                st.session_state["bullish_data"]  = rows
+                st.session_state["bullish_label"] = label
+                st.session_state["bullish_token"] = token
+                st.success(f"Fetched {len(rows):,} in-use findings.")
+            except Exception as exc:
+                st.error(f"API fetch failed: {exc}")
                 return
 
-        rows = st.session_state.get("bullish_data", [])
-        if not rows and "bullish_data" not in st.session_state:
-            st.info("Upload a `.csv.gz` export or pick a cached file, then click **Load / Refresh**.")
-            return
+    if st.session_state.get("bullish_token") != token:
+        for k in ("bullish_data", "bullish_label", "bullish_token"):
+            st.session_state.pop(k, None)
 
-    # ── Mode 2: Fetch from Sysdig API ─────────────────────────────────────────
-    else:
-        token = st.session_state.get("global_api_token", "")
-        if not token:
-            st.warning("No API token configured. Enter your API token in the sidebar.")
-            return
-
-        with st.spinner("Detecting region…"):
-            base_url = _auto_detect_base_url(token)
-        if not base_url:
-            st.warning("Could not detect your Sysdig region. Check that your token is valid.")
-            return
-
-        st.caption(f"Region auto-detected: `{base_url}` · Report: `{REPORT_NAME}`")
-
-        col_btn, col_note = st.columns([1, 4])
-        with col_btn:
-            fetch_btn = st.button("Fetch from API", type="primary", use_container_width=True)
-        with col_note:
-            if "bullish_label" in st.session_state:
-                st.caption(f"Last loaded: {st.session_state['bullish_label']}")
-
-        if fetch_btn:
-            with st.spinner("Connecting to Sysdig Reports Manager…"):
-                try:
-                    rows, source_label = fetch_findings_from_api(base_url, token)
-                    st.session_state["bullish_data"]  = rows
-                    st.session_state["bullish_label"] = source_label
-                    st.success(f"Fetched {len(rows):,} in-use findings.")
-                except Exception as exc:
-                    st.error(f"API fetch failed: {exc}")
-                    return
-
-        rows = st.session_state.get("bullish_data", [])
-        if not rows and "bullish_data" not in st.session_state:
-            st.info("Click **Fetch from API** to pull the latest report on-demand.")
-            return
+    rows = st.session_state.get("bullish_data", [])
+    if not rows and "bullish_data" not in st.session_state:
+        st.info("Click **Fetch from API** to pull the latest report on-demand.")
+        return
 
     # ── Guard ──────────────────────────────────────────────────────────────────
     if not rows:

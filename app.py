@@ -7,9 +7,6 @@ import streamlit as st
 
 from config import SYSDIG_REGIONS
 import posture_analytics
-import registry_analytics
-import cve_risk
-import engineering_fix
 import report_studio
 import bullish_runtime_vulns.page as bullish_page
 
@@ -58,11 +55,8 @@ with st.sidebar:
         "Select Tool",
         options=[
             "📋  Posture Analytics",
-            "🔍  Registry Vulnerabilities",
-            "📊  CVE Risk Overview",
-            "🔧  Engineering Fix View",
             "📄  Report Studio",
-            "🔥  Bullish Runtime Vulns",
+            "🔥  Runtime Vulnerabilities",
         ],
         index=0,
     )
@@ -72,13 +66,7 @@ with st.sidebar:
 # ── Route to selected tool ────────────────────────────────────────────────────
 if tool == "📋  Posture Analytics":
     posture_analytics.render_page()
-elif tool == "🔍  Registry Vulnerabilities":
-    registry_analytics.render_page()
-elif tool == "📊  CVE Risk Overview":
-    cve_risk.render_page()
-elif tool == "🔧  Engineering Fix View":
-    engineering_fix.render_page(api_token, region)
-elif tool == "🔥  Bullish Runtime Vulns":
+elif tool == "🔥  Runtime Vulnerabilities":
     bullish_page.render_page(api_token, region)
 else:
     report_studio.render_sidebar(api_token, region)
