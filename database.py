@@ -66,6 +66,23 @@ def init_database():
         )
     """)
 
+    # Posture snapshots - timestamped captures for migration delta tracking
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS posture_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            total_controls INTEGER,
+            total_failures INTEGER,
+            high_failures INTEGER DEFAULT 0,
+            medium_failures INTEGER DEFAULT 0,
+            low_failures INTEGER DEFAULT 0,
+            info_failures INTEGER DEFAULT 0,
+            csv_data BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
     # Migrate old schema if needed
     _migrate_old_schema(cursor)
 
@@ -408,6 +425,99 @@ def get_database_path() -> str:
 def get_reports_directory() -> str:
     """Return the path to the reports directory."""
     return REPORTS_DIR
+
+
+# =============================================================================
+# POSTURE SNAPSHOT OPERATIONS
+# =============================================================================
+
+def create_snapshot(label: str, phase: str, df_full: 'pd.DataFrame') -> int:
+    """Save a posture snapshot. df_full is the complete DataFrame (Pass+Fail).
+    Returns the snapshot ID."""
+    import gzip
+    import io
+
+    # Compute summary stats
+    df_fail = df_full[df_full['Result'] == 'Fail']
+    total_controls = len(df_full)
+    total_failures = len(df_fail)
+    sev_counts = df_fail['Control Severity'].value_counts()
+
+    # Compress CSV to blob
+    buf = io.BytesIO()
+    with gzip.open(buf, 'wt', encoding='utf-8') as f:
+        df_full.to_csv(f, index=False)
+    csv_blob = buf.getvalue()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+
+    cursor.execute("""
+        INSERT INTO posture_snapshots
+        (label, phase, total_controls, total_failures,
+         high_failures, medium_failures, low_failures, info_failures,
+         csv_data, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        label, phase, total_controls, total_failures,
+        int(sev_counts.get('High', 0)),
+        int(sev_counts.get('Medium', 0)),
+        int(sev_counts.get('Low', 0)),
+        int(sev_counts.get('Info', 0)),
+        csv_blob, now
+    ))
+
+    snapshot_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return snapshot_id
+
+
+def get_all_snapshots() -> list[dict]:
+    """Get all snapshots (without CSV data) ordered by creation time."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, label, phase, total_controls, total_failures,
+               high_failures, medium_failures, low_failures, info_failures,
+               created_at
+        FROM posture_snapshots
+        ORDER BY created_at ASC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_snapshot_dataframe(snapshot_id: int) -> Optional['pd.DataFrame']:
+    """Load a snapshot's full DataFrame from compressed CSV blob."""
+    import gzip
+    import io
+    import pandas as pd
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT csv_data FROM posture_snapshots WHERE id = ?", (snapshot_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    with gzip.open(io.BytesIO(row['csv_data']), 'rt', encoding='utf-8') as f:
+        return pd.read_csv(f)
+
+
+def delete_snapshot(snapshot_id: int) -> bool:
+    """Delete a snapshot by ID."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM posture_snapshots WHERE id = ?", (snapshot_id,))
+    success = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return success
 
 
 # Initialize database on module import

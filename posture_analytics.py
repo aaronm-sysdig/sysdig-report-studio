@@ -18,6 +18,8 @@ import requests
 import streamlit as st
 
 from config import SYSDIG_REGIONS
+import database as db
+import posture_delta
 
 POSTURE_REPORT_NAME = "[PG] Posture"
 REPORTING_API = "/api/platform/reporting/v1"
@@ -485,6 +487,181 @@ def create_downloadable_reports(df: pd.DataFrame, owner_stats: pd.DataFrame, gro
     return owner_export, action_df
 
 
+MIGRATION_PHASES = [
+    "Baseline",
+    "Pre-Migration",
+    "Migration Day",
+    "Post-Migration",
+    "Post-Migration +7d",
+    "Post-Migration +14d",
+    "Post-Migration +30d",
+]
+
+
+def _render_migration_tracker(df_full: pd.DataFrame):
+    """Render the Migration Tracker tab content."""
+    st.markdown("### Migration Posture Tracker")
+    st.caption("Save snapshots at key milestones and compare posture delta over time.")
+
+    # ── Save snapshot ─────────────────────────────────────────────────────────
+    snapshots = db.get_all_snapshots()
+
+    with st.expander("Save Current Data as Snapshot", expanded=len(snapshots) == 0):
+        col_label, col_phase = st.columns(2)
+        with col_label:
+            snap_label = st.text_input(
+                "Snapshot label",
+                value=f"Snapshot {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                key="snap_label",
+            )
+        with col_phase:
+            snap_phase = st.selectbox("Migration phase", MIGRATION_PHASES, key="snap_phase")
+
+        if st.button("Save Snapshot", type="primary", key="save_snap"):
+            if df_full is not None and not df_full.empty:
+                snap_id = db.create_snapshot(snap_label, snap_phase, df_full)
+                st.success(f"Snapshot saved (id={snap_id}): **{snap_label}** — {snap_phase}")
+                st.rerun()
+            else:
+                st.error("No posture data loaded. Fetch from API first.")
+
+    # ── Snapshot list ─────────────────────────────────────────────────────────
+    snapshots = db.get_all_snapshots()
+
+    if not snapshots:
+        st.info("No snapshots saved yet. Fetch posture data and save your first baseline snapshot above.")
+        return
+
+    st.markdown("### Saved Snapshots")
+
+    snap_df = pd.DataFrame(snapshots)
+    snap_df['created_at'] = snap_df['created_at'].str[:19]
+    display_cols = ['id', 'label', 'phase', 'total_controls', 'total_failures',
+                    'high_failures', 'medium_failures', 'low_failures', 'info_failures', 'created_at']
+    st.dataframe(snap_df[display_cols], use_container_width=True, hide_index=True)
+
+    # Delete snapshot
+    with st.expander("Delete a snapshot"):
+        snap_to_delete = st.selectbox(
+            "Select snapshot to delete",
+            options=[s['id'] for s in snapshots],
+            format_func=lambda sid: next(f"{s['label']} ({s['phase']})" for s in snapshots if s['id'] == sid),
+            key="snap_delete_select",
+        )
+        if st.button("Delete", key="snap_delete_btn"):
+            db.delete_snapshot(snap_to_delete)
+            st.success("Snapshot deleted.")
+            st.rerun()
+
+    # ── Trend chart (always show if >= 2 snapshots) ───────────────────────────
+    if len(snapshots) >= 2:
+        st.markdown("---")
+        st.markdown("### Failure Trend Across Snapshots")
+        fig_trend = posture_delta.chart_trend(snapshots)
+        st.plotly_chart(fig_trend, use_container_width=True)
+
+    # ── Delta comparison ──────────────────────────────────────────────────────
+    if len(snapshots) < 2:
+        st.info("Save at least **2 snapshots** to compare deltas.")
+        return
+
+    st.markdown("---")
+    st.markdown("### Compare Two Snapshots")
+
+    snap_options = {s['id']: f"{s['label']} — {s['phase']} ({s['created_at'][:10]})" for s in snapshots}
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        snap_a_id = st.selectbox("Before (Snapshot A)", options=list(snap_options.keys()),
+                                  format_func=lambda x: snap_options[x], index=0,
+                                  key="delta_snap_a")
+    with col_b:
+        default_b = min(len(snapshots) - 1, 1)
+        snap_b_id = st.selectbox("After (Snapshot B)", options=list(snap_options.keys()),
+                                  format_func=lambda x: snap_options[x], index=default_b,
+                                  key="delta_snap_b")
+
+    if snap_a_id == snap_b_id:
+        st.warning("Select two different snapshots to compare.")
+        return
+
+    if st.button("Compare", type="primary", key="compare_btn"):
+        with st.spinner("Computing delta…"):
+            df_a = db.get_snapshot_dataframe(snap_a_id)
+            df_b = db.get_snapshot_dataframe(snap_b_id)
+
+            if df_a is None or df_b is None:
+                st.error("Could not load snapshot data.")
+                return
+
+            delta = posture_delta.compute_delta(df_a, df_b)
+            st.session_state['_posture_delta'] = delta
+            st.session_state['_posture_delta_ids'] = (snap_a_id, snap_b_id)
+
+    # Show results if available
+    delta = st.session_state.get('_posture_delta')
+    delta_ids = st.session_state.get('_posture_delta_ids')
+
+    if delta is None or delta_ids != (snap_a_id, snap_b_id):
+        return
+
+    summary = delta['summary']
+
+    # Headline metrics
+    st.markdown("---")
+    st.markdown("### Delta Summary")
+
+    c1, c2, c3, c4 = st.columns(4)
+    net = summary['net_change']
+    c1.metric("Net Change", f"{'+' if net > 0 else ''}{net:,}",
+              delta=f"{'+' if net > 0 else ''}{net:,}",
+              delta_color="inverse")
+    c2.metric("New Failures", f"{summary['new_failures']:,}")
+    c3.metric("Resolved", f"{summary['resolved']:,}")
+    c4.metric("Persistent", f"{summary['persistent']:,}")
+
+    # Charts
+    col_sev, col_zone = st.columns(2)
+    with col_sev:
+        fig_sev = posture_delta.chart_severity_delta(delta['by_severity'])
+        st.plotly_chart(fig_sev, use_container_width=True)
+    with col_zone:
+        fig_zone = posture_delta.chart_zone_delta(delta['by_zone'])
+        st.plotly_chart(fig_zone, use_container_width=True)
+
+    # Drill-down tables
+    st.markdown("---")
+    tab_new, tab_resolved, tab_persistent = st.tabs([
+        f"New Failures ({summary['new_failures']:,})",
+        f"Resolved ({summary['resolved']:,})",
+        f"Persistent ({summary['persistent']:,})",
+    ])
+
+    drill_cols = ['Control Name', 'Control Severity', 'Control ID',
+                  'Zones', 'Account Id', 'Account Name', 'Resource Name']
+
+    with tab_new:
+        if not delta['new_failures'].empty:
+            display = delta['new_failures'][[c for c in drill_cols if c in delta['new_failures'].columns]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
+        else:
+            st.success("No new failures introduced.")
+
+    with tab_resolved:
+        if not delta['resolved'].empty:
+            display = delta['resolved'][[c for c in drill_cols if c in delta['resolved'].columns]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
+        else:
+            st.info("No failures were resolved between these snapshots.")
+
+    with tab_persistent:
+        if not delta['persistent'].empty:
+            display = delta['persistent'][[c for c in drill_cols if c in delta['persistent'].columns]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
+        else:
+            st.success("No persistent failures.")
+
+
 def render_page():
     """
     Render the Posture Analytics page for compliance report analysis.
@@ -573,8 +750,8 @@ def render_page():
     col2.metric(group_label, f"{unique_owners}")
     col3.metric("Total Accounts", f"{unique_accounts}")
 
-    tab1, tab2, tab3 = st.tabs(["Executive Dashboard", "Security Drill-Down", "Download Reports"])
-    exec_tab, security_tab, download_tab = tab1, tab2, tab3
+    tab1, tab2, tab3, tab4 = st.tabs(["Executive Dashboard", "Security Drill-Down", "Download Reports", "Migration Tracker"])
+    exec_tab, security_tab, download_tab, migration_tab = tab1, tab2, tab3, tab4
 
     with exec_tab:
         st.markdown("### Executive Summary: Who Should We Engage First?")
@@ -666,3 +843,6 @@ div[data-testid="stPills"] button[aria-pressed="true"]:nth-child(4) { background
                 file_name="actionable_report.csv",
                 mime="text/csv"
             )
+
+    with migration_tab:
+        _render_migration_tracker(df_full)
