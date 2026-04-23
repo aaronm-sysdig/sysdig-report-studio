@@ -41,6 +41,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Initialise customer name default on first run
+if 'global_cust_name' not in st.session_state:
+    st.session_state['global_cust_name'] = 'Acme Corp'
+
+# Apply any pending customer name update (set by report_studio when loading a report for editing)
+if '_pending_cust_name' in st.session_state:
+    st.session_state['global_cust_name'] = st.session_state.pop('_pending_cust_name')
+
 # ── Global config sidebar ─────────────────────────────────────────────────────
 with st.sidebar:
     st.image("logo1.png", width=300)
@@ -49,7 +57,7 @@ with st.sidebar:
     st.header("Global Config")
     region = st.selectbox("Sysdig Region", list(SYSDIG_REGIONS.keys()), key="global_region")
     api_token = st.text_input("API Token", type="password", key="global_api_token")
-    cust_name = st.text_input("Customer Name", value="Acme Corp", key="global_cust_name")
+    cust_name = st.text_input("Customer Name", key="global_cust_name")
 
     st.divider()
 
