@@ -60,8 +60,8 @@ _DDL = [
     CREATE TABLE IF NOT EXISTS image (
         image_id VARCHAR PRIMARY KEY,
         os_name VARCHAR,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         current_repository VARCHAR,
         current_tag VARCHAR
     )
@@ -69,22 +69,22 @@ _DDL = [
     """
     CREATE TABLE IF NOT EXISTS repository (
         repository VARCHAR PRIMARY KEY,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS cve (
         cve_id VARCHAR PRIMARY KEY,
-        disclosure_date TIMESTAMP,
-        fix_available_date TIMESTAMP,
+        disclosure_date TIMESTAMPTZ,
+        fix_available_date TIMESTAMPTZ,
         cvss_version VARCHAR,
         initial_severity VARCHAR,
-        cisa_kev_publish_date TIMESTAMP,
-        cisa_kev_due_date TIMESTAMP,
+        cisa_kev_publish_date TIMESTAMPTZ,
+        cisa_kev_due_date TIMESTAMPTZ,
         cisa_kev_known_ransomware BOOLEAN,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ
     )
     """,
     """
@@ -98,16 +98,16 @@ _DDL = [
     CREATE TABLE IF NOT EXISTS cluster (
         cluster_name VARCHAR PRIMARY KEY,
         distribution VARCHAR,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS namespace (
         cluster_name VARCHAR,
         namespace_name VARCHAR,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         PRIMARY KEY (cluster_name, namespace_name)
     )
     """,
@@ -117,8 +117,8 @@ _DDL = [
         namespace_name VARCHAR,
         workload_type VARCHAR,
         workload_name VARCHAR,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         PRIMARY KEY (cluster_name, namespace_name, workload_type, workload_name)
     )
     """,
@@ -140,8 +140,8 @@ _DDL = [
         image_id VARCHAR,
         repository VARCHAR,
         tag VARCHAR,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         PRIMARY KEY (image_id, repository, tag)
     )
     """,
@@ -203,12 +203,12 @@ _DDL = [
         fix_version VARCHAR,
         risk_accepted BOOLEAN,
         public_exploit BOOLEAN,
-        first_seen TIMESTAMP,
-        last_seen TIMESTAMP,
+        first_seen TIMESTAMPTZ,
+        last_seen TIMESTAMPTZ,
         state VARCHAR,
         reason_code VARCHAR,
-        closed_at TIMESTAMP,
-        reopened_at TIMESTAMP,
+        closed_at TIMESTAMPTZ,
+        reopened_at TIMESTAMPTZ,
         reopen_count INTEGER DEFAULT 0,
         days_open INTEGER,
         is_regression BOOLEAN DEFAULT FALSE
@@ -266,10 +266,10 @@ _DDL = [
     """
     CREATE TABLE IF NOT EXISTS snapshot (
         snapshot_id VARCHAR PRIMARY KEY,
-        snapshot_at TIMESTAMP,
+        snapshot_at TIMESTAMPTZ,
         source_filename VARCHAR,
         row_count INTEGER,
-        ingested_at TIMESTAMP
+        ingested_at TIMESTAMPTZ
     )
     """,
     """
@@ -278,7 +278,7 @@ _DDL = [
         stage VARCHAR,
         rows_affected INTEGER,
         duration_ms INTEGER,
-        logged_at TIMESTAMP,
+        logged_at TIMESTAMPTZ,
         PRIMARY KEY (snapshot_id, stage)
     )
     """,
