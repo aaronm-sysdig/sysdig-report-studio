@@ -1,0 +1,4 @@
+cluster,namespace,workload_type,workload_name,team,owner
+eks-corporate,platform-*,*,*,platform,aaron.miles
+eks-corporate,checkout-*,*,*,checkout-team,
+*,*,*,audit-service,security,
