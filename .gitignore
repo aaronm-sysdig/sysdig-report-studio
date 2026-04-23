@@ -25,3 +25,11 @@ Thumbs.db
 # Local dev/testing
 *.log
 .env
+
+# SAS ingest artifacts
+sas.duckdb
+sas.duckdb.wal
+*.duckdb
+*.duckdb.wal
+~/sysdig-vuln-data/
+.pytest_cache/
