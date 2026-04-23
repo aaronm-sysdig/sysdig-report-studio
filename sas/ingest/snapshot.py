@@ -14,12 +14,29 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _hash_file_content(path: Path) -> str:
+    """Streaming sha256 of file contents. Bounded memory regardless of file size."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def compute_snapshot_id(path: Path, row_count: int) -> str:
-    """Deterministic ID from filename + row count. Same CSV = same ID."""
+    """Deterministic ID from filename + row count + content hash.
+
+    Same CSV (same name, same row count, same byte content) → same ID.
+    Different content under the same name → different ID, preventing
+    silent collisions when daily exports share a fixed filename.
+    """
     h = hashlib.sha256()
     h.update(path.name.encode("utf-8"))
     h.update(b"|")
     h.update(str(row_count).encode("utf-8"))
+    h.update(b"|")
+    content_hash = _hash_file_content(path)
+    h.update(content_hash.encode("utf-8"))
     return h.hexdigest()[:32]
 
 
