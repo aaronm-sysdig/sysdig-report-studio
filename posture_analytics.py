@@ -6,154 +6,156 @@ Chart functions return go.Figure objects; render_page() handles all st.plotly_ch
 """
 import gzip
 import io
-import re
-import zipfile
-from datetime import datetime
-from pathlib import Path
+import shutil
+import time
+from datetime import datetime, timezone
+from typing import Optional
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import requests
 import streamlit as st
 
+from config import SYSDIG_REGIONS
+import database as db
+import posture_delta
 
-def extract_date_from_filename(filename: str) -> datetime:
+POSTURE_REPORT_NAME = "[PG] Posture"
+REPORTING_API = "/api/platform/reporting/v1"
+
+
+# ── API helpers (same pattern as Runtime Vulnerabilities page) ────────────────
+
+def _auto_detect_base_url(token: str) -> Optional[str]:
+    """Cycle through all known Sysdig regions and return the first base_url where the token is valid."""
+    cache_key = f"_posture_base_url_{token[:8]}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    for host in SYSDIG_REGIONS.values():
+        base_url = f"https://{host}"
+        try:
+            r = requests.get(f"{base_url}/api/platform/reporting/v1/reports", headers=headers, timeout=6)
+            if r.status_code == 200:
+                st.session_state[cache_key] = base_url
+                return base_url
+        except Exception:
+            continue
+    return None
+
+
+def _api_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def _find_report_id(base_url: str, token: str) -> Optional[tuple]:
+    """Return (reportId, reportName) for the Posture report, or None."""
+    r = requests.get(
+        f"{base_url}{REPORTING_API}/reports",
+        headers=_api_headers(token),
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()
+    reports_list = data if isinstance(data, list) else data.get("reports", [])
+    for report in reports_list:
+        name = report.get("name", "") or report.get("reportName", "")
+        if POSTURE_REPORT_NAME.lower() in name.lower():
+            rid = report.get("id") or report.get("reportId")
+            return int(rid), name
+    return None
+
+
+def _trigger_job(base_url: str, token: str, report_id: int, report_name: str) -> int:
+    now = int(time.time())
+    payload = {
+        "reportId":         report_id,
+        "isReportTemplate": False,
+        "reportFormat":     "csv",
+        "jobName":          report_name,
+        "fileName":         report_name.replace(" ", "_").replace("[", "").replace("]", ""),
+        "jobType":          "ON_DEMAND",
+        "zones":            [],
+        "timeFrame":        {"from": now - 86400, "to": now},
+        "scheduledOn":      datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    r = requests.post(
+        f"{base_url}{REPORTING_API}/jobs",
+        headers=_api_headers(token),
+        json=payload,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def _poll_job(base_url: str, token: str, job_id: int, status_ph) -> Optional[str]:
+    for attempt in range(40):
+        time.sleep(4)
+        r = requests.get(
+            f"{base_url}{REPORTING_API}/jobs/{job_id}",
+            headers=_api_headers(token),
+            timeout=30,
+        )
+        r.raise_for_status()
+        job = r.json()
+        status = job.get("status", "UNKNOWN")
+        status_ph.caption(f"Job status: **{status}** (check {attempt + 1}/40)…")
+        if status == "COMPLETED":
+            return job.get("fullFilePath")
+        if status in ("FAILED", "CANCELLED"):
+            return None
+    return None
+
+
+def fetch_from_api(token: str, base_url: str = None) -> tuple:
     """
-    Extract date from a filename containing an ISO date pattern.
-
-    Args:
-        filename: Name of the file (e.g., 'Report_2026-01-31T03_25_25.610Z.csv.gz')
-
-    Returns:
-        datetime: Extracted date, or current date if no pattern found
-
-    Example:
-        >>> extract_date_from_filename('Report_2026-01-31T03_25_25.csv')
-        datetime(2026, 1, 31)
+    Fetch the [PG] Posture report via Sysdig Reporting API on-demand.
+    Returns (df_full, df_fail, report_name) or raises on error.
     """
-    # Match ISO date pattern: YYYY-MM-DD optionally followed by time
-    pattern = r'(\d{4}-\d{2}-\d{2})T?(\d{2}[_:]\d{2}[_:]\d{2})?'
-    match = re.search(pattern, filename)
-    if match:
-        date_str = match.group(1)
-        return datetime.strptime(date_str, '%Y-%m-%d')
-    # Fallback to current date if no date found
-    return datetime.now()
+    if not base_url:
+        base_url = _auto_detect_base_url(token)
+    if not base_url:
+        raise RuntimeError("Could not detect your Sysdig region. Check that your token is valid.")
 
+    result = _find_report_id(base_url, token)
+    if result is None:
+        raise RuntimeError(f"Report '{POSTURE_REPORT_NAME}' not found in Reports Manager for this account.")
+    report_id, report_name = result
 
-def load_data(uploaded_file) -> pd.DataFrame:
-    """
-    Load posture report CSV data from an uploaded file.
+    job_id = _trigger_job(base_url, token, report_id, report_name)
+    status_ph = st.empty()
+    status_ph.caption(f"Job created (id={job_id}). Waiting for completion…")
 
-    Supports multiple file formats:
-    - Plain CSV files (.csv)
-    - Gzipped CSV files (.csv.gz)
-    - ZIP archives containing CSV files (.zip)
+    file_url = _poll_job(base_url, token, job_id, status_ph)
+    status_ph.empty()
 
-    Args:
-        uploaded_file: Streamlit UploadedFile object
+    if not file_url:
+        raise RuntimeError("Job did not complete successfully within the timeout.")
 
-    Returns:
-        tuple: (full_dataframe, failing_controls_only_dataframe)
+    dl = requests.get(
+        file_url,
+        headers={"Authorization": f"Bearer {token}"},
+        stream=True,
+        timeout=120,
+    )
+    dl.raise_for_status()
 
-    Raises:
-        ValueError: If ZIP archive contains no CSV files
-    """
-    filename = uploaded_file.name
+    buf = io.BytesIO()
+    shutil.copyfileobj(dl.raw, buf)
+    buf.seek(0)
+    data = buf.read()
 
-    # Handle ZIP archives
-    if filename.endswith('.zip'):
-        with zipfile.ZipFile(uploaded_file, 'r') as z:
-            # Find CSV files in the zip (including gzipped ones)
-            csv_files = [f for f in z.namelist() if f.endswith('.csv') or f.endswith('.csv.gz')]
-            if not csv_files:
-                raise ValueError("No CSV files found in the zip archive")
+    with gzip.open(io.BytesIO(data), "rt", encoding="utf-8") as f:
+        df_full = pd.read_csv(f)
 
-            # Use the first CSV file found
-            csv_name = csv_files[0]
-            if csv_name.endswith('.gz'):
-                with z.open(csv_name) as zf:
-                    with gzip.open(zf, 'rt') as f:
-                        df = pd.read_csv(f)
-            else:
-                with z.open(csv_name) as zf:
-                    df = pd.read_csv(zf)
-
-    # Handle gzipped CSV files
-    elif filename.endswith('.gz'):
-        with gzip.open(uploaded_file, 'rt') as f:
-            df = pd.read_csv(f)
-
-    # Handle plain CSV files
-    else:
-        df = pd.read_csv(uploaded_file)
-
-    # Filter to only failing controls for analysis
-    df_fail = df[df['Result'] == 'Fail'].copy()
-
-    return df, df_fail
-
-
-def load_multiple_files(uploaded_files, group_by: str = 'Zones') -> pd.DataFrame:
-    """
-    Load multiple posture report CSV files for trend analysis.
-
-    Combines data from multiple reports (typically from different dates)
-    into a single DataFrame suitable for tracking changes over time.
-
-    Args:
-        uploaded_files: List of Streamlit UploadedFile objects
-        group_by: Column to group failures by ('Zones' or 'Account Id')
-
-    Returns:
-        pd.DataFrame: Combined data with columns for Owner, Total Failures,
-                     Unique Controls, Report Date, and Filename
-    """
-    all_data = []
-
-    for uploaded_file in uploaded_files:
-        filename = uploaded_file.name
-        report_date = extract_date_from_filename(filename)
-
-        if filename.endswith('.zip'):
-            with zipfile.ZipFile(uploaded_file, 'r') as z:
-                csv_files = [f for f in z.namelist() if f.endswith('.csv') or f.endswith('.csv.gz')]
-                if not csv_files:
-                    continue  # Skip zip files without CSVs
-                csv_name = csv_files[0]
-                if csv_name.endswith('.gz'):
-                    with z.open(csv_name) as zf:
-                        with gzip.open(zf, 'rt') as f:
-                            df = pd.read_csv(f)
-                else:
-                    with z.open(csv_name) as zf:
-                        df = pd.read_csv(zf)
-        elif filename.endswith('.gz'):
-            with gzip.open(uploaded_file, 'rt') as f:
-                df = pd.read_csv(f)
-        else:
-            df = pd.read_csv(uploaded_file)
-
-        # Filter to only failing controls
-        df_fail = df[df['Result'] == 'Fail'].copy()
-
-        # Aggregate by group_by column
-        summary = df_fail.groupby(group_by).agg({
-            'Control ID': 'count',
-            'Control Name': 'nunique'
-        }).reset_index()
-        summary.columns = ['Owner', 'Total Failures', 'Unique Controls']
-        summary['Report Date'] = report_date
-        summary['Filename'] = filename
-
-        all_data.append(summary)
-
-    if all_data:
-        combined = pd.concat(all_data, ignore_index=True)
-        combined = combined.sort_values(['Owner', 'Report Date'])
-        return combined
-    return pd.DataFrame()
+    df_fail = df_full[df_full['Result'] == 'Fail'].copy()
+    return df_full, df_fail, report_name
 
 
 def create_executive_charts(df: pd.DataFrame, group_by: str = 'Zones'):
@@ -433,110 +435,6 @@ def create_security_charts(df: pd.DataFrame, group_by: str = 'Zones'):
     return fig_treemap, fig_heatmap, fig_severity
 
 
-def create_trend_charts(trend_data: pd.DataFrame):
-    """
-    Create trend analysis charts for tracking failures over time.
-
-    Visualizes how compliance failures change across multiple report
-    snapshots, helping identify improvement or regression.
-
-    Args:
-        trend_data: DataFrame with aggregated failure data per owner/date
-
-    Returns:
-        tuple: (line_chart, stacked_area_chart, summary_dataframe)
-               Returns (None, None, None) if trend_data is empty
-    """
-    if trend_data.empty:
-        return None, None
-
-    # Get top 10 owners by total failures across all reports
-    top_owners = trend_data.groupby('Owner')['Total Failures'].sum().nlargest(10).index.tolist()
-    trend_filtered = trend_data[trend_data['Owner'].isin(top_owners)]
-
-    # Line chart - Total Failures over time per owner
-    fig_trend = go.Figure()
-
-    for owner in top_owners:
-        owner_data = trend_filtered[trend_filtered['Owner'] == owner].sort_values('Report Date')
-        fig_trend.add_trace(go.Scatter(
-            x=owner_data['Report Date'],
-            y=owner_data['Total Failures'],
-            mode='lines+markers',
-            name=str(owner)[:25] + '...' if len(str(owner)) > 25 else str(owner),
-            hovertemplate=f'{owner}<br>Date: %{{x}}<br>Failures: %{{y}}<extra></extra>'
-        ))
-
-    fig_trend.update_layout(
-        title='<b>Failure Trend Over Time (Top 10 Contributors)</b><br><sup>Goal: See these lines go down!</sup>',
-        xaxis_title='Report Date',
-        yaxis_title='Total Failures',
-        height=500,
-        hovermode='x unified',
-        legend=dict(orientation='v', yanchor='top', y=1, xanchor='left', x=1.02)
-    )
-
-    # Summary table with change indicators
-    summary_data = []
-    for owner in top_owners:
-        owner_data = trend_filtered[trend_filtered['Owner'] == owner].sort_values('Report Date')
-        if len(owner_data) >= 2:
-            first_val = owner_data.iloc[0]['Total Failures']
-            last_val = owner_data.iloc[-1]['Total Failures']
-            change = last_val - first_val
-            pct_change = ((last_val - first_val) / first_val * 100) if first_val > 0 else 0
-            trend = '↓' if change < 0 else ('↑' if change > 0 else '→')
-        else:
-            first_val = owner_data.iloc[0]['Total Failures'] if len(owner_data) > 0 else 0
-            last_val = first_val
-            change = 0
-            pct_change = 0
-            trend = '→'
-
-        summary_data.append({
-            'Owner': str(owner),
-            'First Report': int(first_val),
-            'Latest Report': int(last_val),
-            'Change': int(change),
-            '% Change': f"{pct_change:.1f}%",
-            'Trend': trend
-        })
-
-    summary_df = pd.DataFrame(summary_data)
-
-    # Stacked area chart for overall trend
-    pivot_trend = trend_filtered.pivot_table(
-        index='Report Date',
-        columns='Owner',
-        values='Total Failures',
-        aggfunc='sum',
-        fill_value=0
-    ).reset_index()
-
-    fig_area = go.Figure()
-    for owner in top_owners:
-        if owner in pivot_trend.columns:
-            fig_area.add_trace(go.Scatter(
-                x=pivot_trend['Report Date'],
-                y=pivot_trend[owner],
-                mode='lines',
-                name=str(owner)[:20] + '...' if len(str(owner)) > 20 else str(owner),
-                stackgroup='one',
-                hovertemplate=f'{owner}<br>Failures: %{{y}}<extra></extra>'
-            ))
-
-    fig_area.update_layout(
-        title='<b>Cumulative Failure Trend (Stacked Area)</b>',
-        xaxis_title='Report Date',
-        yaxis_title='Total Failures',
-        height=400,
-        hovermode='x unified',
-        legend=dict(orientation='v', yanchor='top', y=1, xanchor='left', x=1.02)
-    )
-
-    return fig_trend, fig_area, summary_df
-
-
 def create_downloadable_reports(df: pd.DataFrame, owner_stats: pd.DataFrame, group_by: str = 'Zones'):
     """
     Create downloadable CSV reports for offline analysis.
@@ -589,6 +487,181 @@ def create_downloadable_reports(df: pd.DataFrame, owner_stats: pd.DataFrame, gro
     return owner_export, action_df
 
 
+MIGRATION_PHASES = [
+    "Baseline",
+    "Pre-Migration",
+    "Migration Day",
+    "Post-Migration",
+    "Post-Migration +7d",
+    "Post-Migration +14d",
+    "Post-Migration +30d",
+]
+
+
+def _render_migration_tracker(df_full: pd.DataFrame):
+    """Render the Migration Tracker tab content."""
+    st.markdown("### Migration Posture Tracker")
+    st.caption("Save snapshots at key milestones and compare posture delta over time.")
+
+    # ── Save snapshot ─────────────────────────────────────────────────────────
+    snapshots = db.get_all_snapshots()
+
+    with st.expander("Save Current Data as Snapshot", expanded=len(snapshots) == 0):
+        col_label, col_phase = st.columns(2)
+        with col_label:
+            snap_label = st.text_input(
+                "Snapshot label",
+                value=f"Snapshot {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                key="snap_label",
+            )
+        with col_phase:
+            snap_phase = st.selectbox("Migration phase", MIGRATION_PHASES, key="snap_phase")
+
+        if st.button("Save Snapshot", type="primary", key="save_snap"):
+            if df_full is not None and not df_full.empty:
+                snap_id = db.create_snapshot(snap_label, snap_phase, df_full)
+                st.success(f"Snapshot saved (id={snap_id}): **{snap_label}** — {snap_phase}")
+                st.rerun()
+            else:
+                st.error("No posture data loaded. Fetch from API first.")
+
+    # ── Snapshot list ─────────────────────────────────────────────────────────
+    snapshots = db.get_all_snapshots()
+
+    if not snapshots:
+        st.info("No snapshots saved yet. Fetch posture data and save your first baseline snapshot above.")
+        return
+
+    st.markdown("### Saved Snapshots")
+
+    snap_df = pd.DataFrame(snapshots)
+    snap_df['created_at'] = snap_df['created_at'].str[:19]
+    display_cols = ['id', 'label', 'phase', 'total_controls', 'total_failures',
+                    'high_failures', 'medium_failures', 'low_failures', 'info_failures', 'created_at']
+    st.dataframe(snap_df[display_cols], use_container_width=True, hide_index=True)
+
+    # Delete snapshot
+    with st.expander("Delete a snapshot"):
+        snap_to_delete = st.selectbox(
+            "Select snapshot to delete",
+            options=[s['id'] for s in snapshots],
+            format_func=lambda sid: next(f"{s['label']} ({s['phase']})" for s in snapshots if s['id'] == sid),
+            key="snap_delete_select",
+        )
+        if st.button("Delete", key="snap_delete_btn"):
+            db.delete_snapshot(snap_to_delete)
+            st.success("Snapshot deleted.")
+            st.rerun()
+
+    # ── Trend chart (always show if >= 2 snapshots) ───────────────────────────
+    if len(snapshots) >= 2:
+        st.markdown("---")
+        st.markdown("### Failure Trend Across Snapshots")
+        fig_trend = posture_delta.chart_trend(snapshots)
+        st.plotly_chart(fig_trend, use_container_width=True)
+
+    # ── Delta comparison ──────────────────────────────────────────────────────
+    if len(snapshots) < 2:
+        st.info("Save at least **2 snapshots** to compare deltas.")
+        return
+
+    st.markdown("---")
+    st.markdown("### Compare Two Snapshots")
+
+    snap_options = {s['id']: f"{s['label']} — {s['phase']} ({s['created_at'][:10]})" for s in snapshots}
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        snap_a_id = st.selectbox("Before (Snapshot A)", options=list(snap_options.keys()),
+                                  format_func=lambda x: snap_options[x], index=0,
+                                  key="delta_snap_a")
+    with col_b:
+        default_b = min(len(snapshots) - 1, 1)
+        snap_b_id = st.selectbox("After (Snapshot B)", options=list(snap_options.keys()),
+                                  format_func=lambda x: snap_options[x], index=default_b,
+                                  key="delta_snap_b")
+
+    if snap_a_id == snap_b_id:
+        st.warning("Select two different snapshots to compare.")
+        return
+
+    if st.button("Compare", type="primary", key="compare_btn"):
+        with st.spinner("Computing delta…"):
+            df_a = db.get_snapshot_dataframe(snap_a_id)
+            df_b = db.get_snapshot_dataframe(snap_b_id)
+
+            if df_a is None or df_b is None:
+                st.error("Could not load snapshot data.")
+                return
+
+            delta = posture_delta.compute_delta(df_a, df_b)
+            st.session_state['_posture_delta'] = delta
+            st.session_state['_posture_delta_ids'] = (snap_a_id, snap_b_id)
+
+    # Show results if available
+    delta = st.session_state.get('_posture_delta')
+    delta_ids = st.session_state.get('_posture_delta_ids')
+
+    if delta is None or delta_ids != (snap_a_id, snap_b_id):
+        return
+
+    summary = delta['summary']
+
+    # Headline metrics
+    st.markdown("---")
+    st.markdown("### Delta Summary")
+
+    c1, c2, c3, c4 = st.columns(4)
+    net = summary['net_change']
+    c1.metric("Net Change", f"{'+' if net > 0 else ''}{net:,}",
+              delta=f"{'+' if net > 0 else ''}{net:,}",
+              delta_color="inverse")
+    c2.metric("New Failures", f"{summary['new_failures']:,}")
+    c3.metric("Resolved", f"{summary['resolved']:,}")
+    c4.metric("Persistent", f"{summary['persistent']:,}")
+
+    # Charts
+    col_sev, col_zone = st.columns(2)
+    with col_sev:
+        fig_sev = posture_delta.chart_severity_delta(delta['by_severity'])
+        st.plotly_chart(fig_sev, use_container_width=True)
+    with col_zone:
+        fig_zone = posture_delta.chart_zone_delta(delta['by_zone'])
+        st.plotly_chart(fig_zone, use_container_width=True)
+
+    # Drill-down tables
+    st.markdown("---")
+    tab_new, tab_resolved, tab_persistent = st.tabs([
+        f"New Failures ({summary['new_failures']:,})",
+        f"Resolved ({summary['resolved']:,})",
+        f"Persistent ({summary['persistent']:,})",
+    ])
+
+    drill_cols = ['Control Name', 'Control Severity', 'Control ID',
+                  'Zones', 'Account Id', 'Account Name', 'Resource Name']
+
+    with tab_new:
+        if not delta['new_failures'].empty:
+            display = delta['new_failures'][[c for c in drill_cols if c in delta['new_failures'].columns]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
+        else:
+            st.success("No new failures introduced.")
+
+    with tab_resolved:
+        if not delta['resolved'].empty:
+            display = delta['resolved'][[c for c in drill_cols if c in delta['resolved'].columns]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
+        else:
+            st.info("No failures were resolved between these snapshots.")
+
+    with tab_persistent:
+        if not delta['persistent'].empty:
+            display = delta['persistent'][[c for c in drill_cols if c in delta['persistent'].columns]]
+            st.dataframe(display, use_container_width=True, hide_index=True)
+        else:
+            st.success("No persistent failures.")
+
+
 def render_page():
     """
     Render the Posture Analytics page for compliance report analysis.
@@ -601,125 +674,88 @@ def render_page():
     - Downloadable CSV reports for offline use
     """
     st.title("Sysdig Posture Report Analytics")
-    st.markdown("Upload your posture report CSV to generate executive and security dashboards.")
 
-    # ── Upload + grouping inline ───────────────────────────────────────────────
-    up_col, grp_col = st.columns([3, 1], gap="large")
+    group_by = st.selectbox(
+        "Group failures by",
+        options=['Zones', 'Account Id'],
+        index=0,
+        help="Group failures by Zones (owner) or by Account Id",
+        key="posture_group_by",
+    )
 
-    with up_col:
-        uploaded_files = st.file_uploader(
-            "Upload posture report CSV(s) — drag & drop multiple files to see trends over time",
-            type=['csv', 'gz', 'zip'],
-            accept_multiple_files=True,
-            help="Upload one or more CSV/gzipped CSV/zip files. Multiple files enable trend analysis.",
-            key="posture_uploader",
-        )
+    df = None
+    df_full = None
+    source_label = ""
 
-    with grp_col:
-        group_by = st.selectbox(
-            "Group failures by",
-            options=['Zones', 'Account Id'],
-            index=0,
-            help="Group failures by Zones (owner) or by Account Id",
-            key="posture_group_by",
-        )
-        if uploaded_files:
-            st.success(f"{len(uploaded_files)} file(s) loaded")
-            with st.expander("Files"):
-                for f in uploaded_files:
-                    date = extract_date_from_filename(f.name)
-                    st.caption(f"{f.name[:35]} · {date.strftime('%Y-%m-%d')}")
-
-    if not uploaded_files:
-        st.markdown("---")
-        st.markdown("### How to use")
-        st.markdown("""
-        1. Export your posture report(s) from Sysdig as CSV
-        2. **Drag & drop** one or more files into the upload area above
-        3. View the generated dashboards below
-        4. **Upload multiple reports** from different dates to see failure trends over time
-        5. Download summary reports as needed
-        """)
+    # ── Fetch from Sysdig API ──────────────────────────────────────────────────
+    token = st.session_state.get("global_api_token", "")
+    if not token:
+        st.warning("No API token configured. Enter your API token in the sidebar.")
         return
 
-    # Determine if we have multiple files for trend analysis
-    has_multiple_files = len(uploaded_files) > 1
+    with st.spinner("Detecting region…"):
+        base_url = _auto_detect_base_url(token)
+    if not base_url:
+        st.warning("Could not detect your Sysdig region. Check that your token is valid.")
+        return
 
-    # Use the most recent file for single-file analysis
-    sorted_files = sorted(uploaded_files, key=lambda f: extract_date_from_filename(f.name), reverse=True)
-    latest_file = sorted_files[0]
+    st.caption(f"Region auto-detected: `{base_url}` · Report: `{POSTURE_REPORT_NAME}`")
 
-    # Load and process data for the latest file
-    with st.spinner("Loading and processing data..."):
-        try:
-            df_full, df = load_data(latest_file)
-            if has_multiple_files:
-                for f in uploaded_files:
-                    f.seek(0)
-                trend_data = load_multiple_files(uploaded_files, group_by)
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-            return
+    col_btn, col_note = st.columns([1, 4])
+    with col_btn:
+        fetch_btn = st.button("Fetch from API", type="primary", use_container_width=True)
+    with col_note:
+        if "posture_label" in st.session_state:
+            st.caption(f"Last loaded: {st.session_state['posture_label']}")
+
+    if fetch_btn:
+        with st.spinner("Fetching posture report from Sysdig Reports Manager…"):
+            try:
+                df_full, df, report_name = fetch_from_api(token, base_url)
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+                source_label = f"API fetch — {report_name} ({ts})"
+                st.session_state["posture_df_full"] = df_full
+                st.session_state["posture_df"]      = df
+                st.session_state["posture_label"]   = source_label
+                st.session_state["posture_token"]   = token
+                st.success(f"Fetched {len(df_full):,} rows.")
+            except Exception as exc:
+                st.error(f"API fetch failed: {exc}")
+                return
+
+    if df is None:
+        if st.session_state.get("posture_token") == token:
+            df_full = st.session_state.get("posture_df_full")
+            df      = st.session_state.get("posture_df")
+            source_label = st.session_state.get("posture_label", "")
+        else:
+            for k in ("posture_df_full", "posture_df", "posture_label", "posture_token"):
+                st.session_state.pop(k, None)
+
+    if df is None:
+        st.info("Click **Fetch from API** to pull the latest posture report on-demand.")
+        return
+
+    if df is None or df.empty:
+        st.info("No failing controls found in this report.")
+        return
 
     # Display metrics
     st.markdown("---")
     fig_pie, fig_bar, total_failures, unique_owners, unique_accounts, top_owners, owner_stats = create_executive_charts(df, group_by)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     col1.metric("Total Failures", f"{total_failures:,}")
     group_label = "Unique Zones" if group_by == 'Zones' else "Unique Accounts"
     col2.metric(group_label, f"{unique_owners}")
     col3.metric("Total Accounts", f"{unique_accounts}")
-    col4.metric("Reports Loaded", f"{len(uploaded_files)}")
 
-    # Tabs for different views
-    if has_multiple_files:
-        tab1, tab2, tab3, tab4 = st.tabs(["Trend Analysis", "Executive Dashboard", "Security Drill-Down", "Download Reports"])
-    else:
-        tab1, tab2, tab3 = st.tabs(["Executive Dashboard", "Security Drill-Down", "Download Reports"])
-
-    if has_multiple_files:
-        with tab1:
-            st.markdown("### Failure Trend Analysis")
-            st.markdown(f"Analyzing **{len(uploaded_files)} reports** to track failures over time.")
-
-            fig_trend, fig_area, summary_df = create_trend_charts(trend_data)
-
-            if fig_trend:
-                st.plotly_chart(fig_trend, use_container_width=True)
-
-                st.markdown("---")
-                st.markdown("### Progress Summary")
-                st.markdown("**Goal:** See failure counts decrease over time (negative change = improvement)")
-
-                def highlight_trend(val):
-                    if val == '↓':
-                        return 'color: green; font-weight: bold'
-                    elif val == '↑':
-                        return 'color: red; font-weight: bold'
-                    return ''
-
-                st.dataframe(
-                    summary_df.style.applymap(highlight_trend, subset=['Trend']),
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-                st.markdown("---")
-                st.markdown("### Cumulative View")
-                st.plotly_chart(fig_area, use_container_width=True)
-
-        exec_tab = tab2
-        security_tab = tab3
-        download_tab = tab4
-    else:
-        exec_tab = tab1
-        security_tab = tab2
-        download_tab = tab3
+    tab1, tab2, tab3, tab4 = st.tabs(["Executive Dashboard", "Security Drill-Down", "Download Reports", "Migration Tracker"])
+    exec_tab, security_tab, download_tab, migration_tab = tab1, tab2, tab3, tab4
 
     with exec_tab:
         st.markdown("### Executive Summary: Who Should We Engage First?")
-        st.markdown(f"*Showing data from: {latest_file.name}*")
+        st.markdown(f"*Showing data from: {source_label}*")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -807,3 +843,6 @@ div[data-testid="stPills"] button[aria-pressed="true"]:nth-child(4) { background
                 file_name="actionable_report.csv",
                 mime="text/csv"
             )
+
+    with migration_tab:
+        _render_migration_tracker(df_full)
