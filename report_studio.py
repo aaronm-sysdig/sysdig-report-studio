@@ -530,15 +530,23 @@ def render_page(api_token: str, region: str, cust_name: str):
 
     if 'report_blocks' not in st.session_state:
         st.session_state['report_blocks'] = []
+    if 'rs_section' not in st.session_state:
+        st.session_state['rs_section'] = "🎨 Element Designer"
+    if '_pending_rs_section' in st.session_state:
+        st.session_state['rs_section'] = st.session_state.pop('_pending_rs_section')
 
-    tab_design, tab_preview, tab_reports = st.tabs([
-        "🎨 Element Designer", "📋 Report Preview", "📁 Reports"
-    ])
+    rs_section = st.radio(
+        "",
+        ["🎨 Element Designer", "📋 Report Preview", "📁 Reports"],
+        horizontal=True,
+        key="rs_section",
+        label_visibility="collapsed"
+    )
 
     # ----------------------------------------------------------
     # Tab 1: Element Designer
     # ----------------------------------------------------------
-    with tab_design:
+    if rs_section == "🎨 Element Designer":
         if 'fetch_error' in st.session_state:
             st.error(st.session_state['fetch_error'])
 
@@ -614,7 +622,7 @@ def render_page(api_token: str, region: str, cust_name: str):
     # ----------------------------------------------------------
     # Tab 2: Report Preview
     # ----------------------------------------------------------
-    with tab_preview:
+    elif rs_section == "📋 Report Preview":
         if not st.session_state['report_blocks']:
             st.info("No elements added yet. Design an element in the first tab and click 'Add to Report'.")
         else:
@@ -694,7 +702,7 @@ def render_page(api_token: str, region: str, cust_name: str):
     # ----------------------------------------------------------
     # Tab 3: Reports
     # ----------------------------------------------------------
-    with tab_reports:
+    elif rs_section == "📁 Reports":
         st.subheader("Saved Reports")
 
         templates = db.get_all_templates()
@@ -754,6 +762,11 @@ def render_page(api_token: str, region: str, cust_name: str):
                                                     snapshot = json.load(f).get('data', [])
                                             else:
                                                 snapshot = []
+                                        elif block_cfg.get('type') == 'trend_summary':
+                                            zone_id = block_cfg.get('zone_id')
+                                            days = block_cfg.get('days', 31)
+                                            data, _ = fetch_vulnerability_history(tmpl_region, api_token, days, zone_id)
+                                            snapshot = data if data else []
                                         else:
                                             query = block_cfg.get('query', '')
                                             if query:
@@ -769,8 +782,10 @@ def render_page(api_token: str, region: str, cust_name: str):
                                     st.session_state['report_blocks'] = blocks
                                     st.session_state['editing_template_id'] = tmpl['id']
                                     st.session_state['editing_template_name'] = tmpl['name']
-                                    st.session_state['editing_customer_name'] = config.get('global', {}).get('customer', cust_name)
-                                st.toast(f"Loaded '{tmpl['name']}' for editing. Go to Report Preview tab.")
+                                    loaded_customer = config.get('global', {}).get('customer', cust_name)
+                                    st.session_state['editing_customer_name'] = loaded_customer
+                                    st.session_state['_pending_cust_name'] = loaded_customer
+                                    st.session_state['_pending_rs_section'] = "📋 Report Preview"
                                 st.rerun()
 
                         # Generate Now button
