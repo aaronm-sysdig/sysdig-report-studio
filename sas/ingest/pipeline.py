@@ -41,45 +41,52 @@ def run_pipeline(*, conn, csv_path: Path, resolver: ResolverChain,
     if not force and is_already_ingested(conn, snapshot_id):
         return {"already_ingested": True, "snapshot_id": snapshot_id}
 
-    # 4. Record the snapshot
-    record_snapshot(conn, snapshot_id=snapshot_id, snapshot_at=snapshot_at,
-                    source_filename=csv_path.name, row_count=len(df))
-    log_stage(conn, snapshot_id=snapshot_id, stage="load",
-              rows_affected=len(df), duration_ms=load_ms)
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        # 4. Record the snapshot
+        record_snapshot(conn, snapshot_id=snapshot_id, snapshot_at=snapshot_at,
+                        source_filename=csv_path.name, row_count=len(df))
+        log_stage(conn, snapshot_id=snapshot_id, stage="load",
+                  rows_affected=len(df), duration_ms=load_ms)
 
-    # 5. Entities
-    t = time.monotonic()
-    upsert_entities(conn, df, snapshot_at)
-    log_stage(conn, snapshot_id=snapshot_id, stage="entities",
-              rows_affected=len(df), duration_ms=_ms(t))
+        # 5. Entities
+        t = time.monotonic()
+        upsert_entities(conn, df, snapshot_at)
+        log_stage(conn, snapshot_id=snapshot_id, stage="entities",
+                  rows_affected=len(df), duration_ms=_ms(t))
 
-    # 6. Ownership
-    t = time.monotonic()
-    _resolve_and_upsert_ownership(conn, df, resolver)
-    log_stage(conn, snapshot_id=snapshot_id, stage="ownership",
-              rows_affected=len(df), duration_ms=_ms(t))
+        # 6. Ownership
+        t = time.monotonic()
+        _resolve_and_upsert_ownership(conn, df, resolver)
+        log_stage(conn, snapshot_id=snapshot_id, stage="ownership",
+                  rows_affected=len(df), duration_ms=_ms(t))
 
-    # 7. Runtime snapshot
-    t = time.monotonic()
-    write_runtime_snapshot(conn, df, snapshot_at)
-    log_stage(conn, snapshot_id=snapshot_id, stage="runtime_snapshot",
-              rows_affected=len(df), duration_ms=_ms(t))
+        # 7. Runtime snapshot
+        t = time.monotonic()
+        write_runtime_snapshot(conn, df, snapshot_at)
+        log_stage(conn, snapshot_id=snapshot_id, stage="runtime_snapshot",
+                  rows_affected=len(df), duration_ms=_ms(t))
 
-    # 8. Finding diff
-    t = time.monotonic()
-    diff_counts = diff_and_apply_findings(conn, df, snapshot_at)
-    log_stage(conn, snapshot_id=snapshot_id, stage="finding_diff",
-              rows_affected=sum(diff_counts.values()), duration_ms=_ms(t))
+        # 8. Finding diff
+        t = time.monotonic()
+        diff_counts = diff_and_apply_findings(conn, df, snapshot_at)
+        log_stage(conn, snapshot_id=snapshot_id, stage="finding_diff",
+                  rows_affected=sum(diff_counts.values()), duration_ms=_ms(t))
 
-    # 9. Rollups
-    t = time.monotonic()
-    rebuild_rollups_for_date(conn, snapshot_at.date())
-    log_stage(conn, snapshot_id=snapshot_id, stage="rollups",
-              rows_affected=0, duration_ms=_ms(t))
+        # 9. Rollups
+        t = time.monotonic()
+        rebuild_rollups_for_date(conn, snapshot_at.date())
+        log_stage(conn, snapshot_id=snapshot_id, stage="rollups",
+                  rows_affected=0, duration_ms=_ms(t))
 
-    total_ms = _ms(t0)
-    log_stage(conn, snapshot_id=snapshot_id, stage="total",
-              rows_affected=len(df), duration_ms=total_ms)
+        total_ms = _ms(t0)
+        log_stage(conn, snapshot_id=snapshot_id, stage="total",
+                  rows_affected=len(df), duration_ms=total_ms)
+
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
     return {
         "already_ingested": False,
