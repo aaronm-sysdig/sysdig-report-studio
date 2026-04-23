@@ -3,6 +3,31 @@
 Matches §4 of the design spec.
 """
 
+# ---------------------------------------------------------------------------
+# Shared rollup metric column fragments
+# ---------------------------------------------------------------------------
+# These 11 count columns appear in every rollup table.  Define once so that
+# adding a new metric only requires a single edit here.
+_ROLLUP_METRIC_COLS_SQL = """
+    count_open_critical INTEGER,
+    count_open_high INTEGER,
+    count_open_medium INTEGER,
+    count_open_low INTEGER,
+    count_open INTEGER,
+    count_new INTEGER,
+    count_fixed_patched INTEGER,
+    count_fixed_retired INTEGER,
+    count_fixed_accepted INTEGER,
+    count_fixed_other INTEGER,
+    count_regressed INTEGER"""
+
+# MTTR columns are meaningful at image, workload, and team grain but NOT at
+# repository grain (repository-level join would require image-level data).
+_ROLLUP_MTTR_COLS_SQL = """
+    mttr_sum INTEGER,
+    mttr_count INTEGER"""
+
+
 EXPECTED_TABLES = [
     "image",
     "repository",
@@ -195,85 +220,36 @@ _DDL = [
     ON finding_state (image_id, cve_id, package_name, package_version, package_path)
     """,
     # --- Rollups ---
-    """
+    f"""
     CREATE TABLE IF NOT EXISTS daily_metrics_by_image (
         date DATE,
-        image_id VARCHAR,
-        count_open_critical INTEGER,
-        count_open_high INTEGER,
-        count_open_medium INTEGER,
-        count_open_low INTEGER,
-        count_open INTEGER,
-        count_new INTEGER,
-        count_fixed_patched INTEGER,
-        count_fixed_retired INTEGER,
-        count_fixed_accepted INTEGER,
-        count_fixed_other INTEGER,
-        count_regressed INTEGER,
-        mttr_sum INTEGER,
-        mttr_count INTEGER,
+        image_id VARCHAR,{_ROLLUP_METRIC_COLS_SQL},{_ROLLUP_MTTR_COLS_SQL},
         PRIMARY KEY (date, image_id)
     )
     """,
-    """
+    f"""
     CREATE TABLE IF NOT EXISTS daily_metrics_by_workload (
         date DATE,
         cluster_name VARCHAR,
         namespace_name VARCHAR,
         workload_type VARCHAR,
-        workload_name VARCHAR,
-        count_open_critical INTEGER,
-        count_open_high INTEGER,
-        count_open_medium INTEGER,
-        count_open_low INTEGER,
-        count_open INTEGER,
-        count_new INTEGER,
-        count_fixed_patched INTEGER,
-        count_fixed_retired INTEGER,
-        count_fixed_accepted INTEGER,
-        count_fixed_other INTEGER,
-        count_regressed INTEGER,
-        mttr_sum INTEGER,
-        mttr_count INTEGER,
+        workload_name VARCHAR,{_ROLLUP_METRIC_COLS_SQL},{_ROLLUP_MTTR_COLS_SQL},
         replica_count INTEGER,
         PRIMARY KEY (date, cluster_name, namespace_name, workload_type, workload_name)
     )
     """,
-    """
+    f"""
     CREATE TABLE IF NOT EXISTS daily_metrics_by_team (
         date DATE,
-        team_id VARCHAR,
-        count_open_critical INTEGER,
-        count_open_high INTEGER,
-        count_open_medium INTEGER,
-        count_open_low INTEGER,
-        count_open INTEGER,
-        count_new INTEGER,
-        count_fixed_patched INTEGER,
-        count_fixed_retired INTEGER,
-        count_fixed_accepted INTEGER,
-        count_fixed_other INTEGER,
-        count_regressed INTEGER,
-        mttr_sum INTEGER,
-        mttr_count INTEGER,
+        team_id VARCHAR,{_ROLLUP_METRIC_COLS_SQL},{_ROLLUP_MTTR_COLS_SQL},
         PRIMARY KEY (date, team_id)
     )
     """,
-    """
+    f"""
     CREATE TABLE IF NOT EXISTS daily_metrics_by_repository (
         date DATE,
-        repository VARCHAR,
-        count_open_critical INTEGER,
-        count_open_high INTEGER,
-        count_open_medium INTEGER,
-        count_open_low INTEGER,
-        count_open INTEGER,
-        count_new INTEGER,
-        count_fixed_patched INTEGER,
-        count_fixed_retired INTEGER,
-        count_fixed_accepted INTEGER,
-        count_fixed_other INTEGER,
-        count_regressed INTEGER,
+        repository VARCHAR,{_ROLLUP_METRIC_COLS_SQL},
+        -- mttr not meaningful at repository grain (image-level join required)
         PRIMARY KEY (date, repository)
     )
     """,
