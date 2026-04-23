@@ -262,6 +262,8 @@ _DDL = [
         PRIMARY KEY (date, cluster_name, severity)
     )
     """,
+    # --- Sequences ---
+    "CREATE SEQUENCE IF NOT EXISTS seq_finding_id START 1",
     # --- Operational ---
     """
     CREATE TABLE IF NOT EXISTS snapshot (
