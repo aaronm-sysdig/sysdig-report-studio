@@ -36,7 +36,13 @@ def two_container_df():
     ])
 
 
-def test_runtime_snapshot_aggregates_replica_counts(db, two_container_df):
+def test_runtime_snapshot_deduplicates_csv_rows(db, two_container_df):
+    """Duplicate CSV rows (same workload/container/image) collapse to one row with replica_count=1.
+
+    The Sysdig CSV has one row per vulnerability, not per pod. Duplicate rows
+    for the same container mean the same container had multiple CVEs — not
+    multiple pods. replica_count=1 means 'observed running on this day'.
+    """
     create_schema(db)
     snapshot_at = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     write_runtime_snapshot(db, two_container_df, snapshot_at)
@@ -45,7 +51,7 @@ def test_runtime_snapshot_aggregates_replica_counts(db, two_container_df):
         "SELECT workload_name, replica_count FROM workload_runs_image_daily "
         "ORDER BY workload_name"
     ).fetchall()
-    assert rows == [("bar", 1), ("foo", 2)]
+    assert rows == [("bar", 1), ("foo", 1)]
 
 
 def test_runtime_snapshot_is_idempotent_on_same_day(db, two_container_df):
