@@ -53,3 +53,44 @@ def test_week_granularity_no_rollup():
 
 def test_month_granularity_no_rollup():
     assert can_use_rollup(_q("Image", "count_open", granularity="month")) is False
+
+
+# --- filter-column gate tests ---
+
+def test_query_with_finding_level_filter_falls_through_to_direct_path():
+    """A filter on 'severity' (not on rollup tables) must force the direct path."""
+    from sas.query.primitives import Filter
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_open",
+        filters=[Filter(field="severity", operator="eq", value="Critical")],
+    )
+    assert can_use_rollup(q) is False
+
+
+def test_query_with_image_id_filter_still_uses_rollup():
+    """A filter on image_id (which IS on daily_metrics_by_image) stays on rollup."""
+    from sas.query.primitives import Filter
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_open",
+        filters=[Filter(field="image_id", operator="eq", value="sha256:abc")],
+    )
+    assert can_use_rollup(q) == "daily_metrics_by_image"
+
+
+def test_cluster_severity_rollup_allows_severity_filter():
+    """The daily_metrics_by_cluster_severity table DOES have severity as a filterable column."""
+    from sas.query.primitives import Filter
+    q = Query(
+        lens="Cluster",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_open",
+        filters=[Filter(field="severity", operator="eq", value="Critical")],
+    )
+    assert can_use_rollup(q) == "daily_metrics_by_cluster_severity"

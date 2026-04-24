@@ -16,6 +16,18 @@ _LENS_TO_ROLLUP = {
     "Cluster":    "daily_metrics_by_cluster_severity",
 }
 
+# Columns on each rollup table that are safe to filter on.
+# Measure/aggregate columns (count_open etc.) are intentionally excluded.
+# Finding-level columns absent from a table must not appear here — their
+# presence means the query needs the direct path (joining finding_state).
+_ROLLUP_FILTER_COLUMNS: dict[str, set[str]] = {
+    "daily_metrics_by_image": {"image_id"},
+    "daily_metrics_by_workload": {"cluster_name", "namespace_name", "workload_type", "workload_name"},
+    "daily_metrics_by_team": {"team_id"},
+    "daily_metrics_by_repository": {"repository"},
+    "daily_metrics_by_cluster_severity": {"cluster_name", "severity"},
+}
+
 
 def can_use_rollup(query: Query) -> bool | str:
     """Return rollup table name if eligible, False otherwise.
@@ -24,6 +36,7 @@ def can_use_rollup(query: Query) -> bool | str:
     - granularity == 'day'
     - measure is in _ROLLUP_MEASURES
     - lens has a corresponding rollup table
+    - every filter field exists as a column on that rollup table
     """
     if query.time.granularity != "day":
         return False
@@ -32,4 +45,8 @@ def can_use_rollup(query: Query) -> bool | str:
     table = _LENS_TO_ROLLUP.get(query.lens)
     if table is None:
         return False
+    allowed = _ROLLUP_FILTER_COLUMNS.get(table, set())
+    for f in query.filters:
+        if f.field not in allowed:
+            return False
     return table
