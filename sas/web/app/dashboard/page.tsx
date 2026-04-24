@@ -1,10 +1,15 @@
 import { AppShell } from "@/components/app-shell/AppShell";
 import { FleetCriticalTrend } from "@/components/widgets/FleetCriticalTrend";
+import { NewFixedRegressed } from "@/components/widgets/NewFixedRegressed";
+import { KevRansomwareExposure } from "@/components/widgets/KevRansomwareExposure";
+import { RepositoryTagHygiene } from "@/components/widgets/RepositoryTagHygiene";
+import { ImageInventoryGrid } from "@/components/widgets/ImageInventoryGrid";
+import { FindingsTable } from "@/components/widgets/FindingsTable";
 
 export default function DashboardPage() {
   return (
     <AppShell pageTitle="Dashboard">
-      {/* 12-column CSS grid — widgets span 4, 6, or 12 columns */}
+      {/* 12-column CSS grid — widgets span 6 or 12 columns */}
       <div
         className="grid"
         style={{
@@ -12,26 +17,30 @@ export default function DashboardPage() {
           gap: "var(--gap-widget)",
         }}
       >
-        {/* Widget 2: Fleet Critical Trend — 6-column span */}
+        {/* Row 1 — fleet metrics side by side */}
         <div style={{ gridColumn: "span 6" }}>
           <FleetCriticalTrend />
         </div>
+        <div style={{ gridColumn: "span 6" }}>
+          <NewFixedRegressed />
+        </div>
 
-        {/* Remaining 6-column placeholder — ready for Task 3.2 widgets */}
-        <div
-          style={{
-            gridColumn: "span 6",
-            borderRadius: "var(--radius)",
-            border: "1px dashed var(--border-subtle)",
-          }}
-          className="flex items-center justify-center h-[280px]"
-        >
-          <span
-            className="text-sm italic"
-            style={{ color: "var(--fg-muted)" }}
-          >
-            More widgets coming in Phase 3.2
-          </span>
+        {/* Row 2 — exposure + repository hygiene */}
+        <div style={{ gridColumn: "span 6" }}>
+          <KevRansomwareExposure />
+        </div>
+        <div style={{ gridColumn: "span 6" }}>
+          <RepositoryTagHygiene />
+        </div>
+
+        {/* Row 3 — image inventory full width */}
+        <div style={{ gridColumn: "span 12" }}>
+          <ImageInventoryGrid />
+        </div>
+
+        {/* Row 4 — findings table full width */}
+        <div style={{ gridColumn: "span 12" }}>
+          <FindingsTable />
         </div>
       </div>
     </AppShell>
