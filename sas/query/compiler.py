@@ -5,6 +5,13 @@ Two paths:
 2. Direct path — query finding_state, compute measure predicate per date.
 
 The caller (FastAPI route) owns the connection lifecycle.
+
+**Known limitation — count_open over historical dates:**
+The direct path for `count_open` uses `last_seen::DATE = target_date` as the date anchor. Because
+ingestion updates `last_seen` for every OPEN finding on every snapshot, this returns accurate counts
+only for the *most recent* ingested snapshot date. For historical dates, use the rollup path
+(daily_metrics_by_*) which precomputes `count_open` per-day correctly. A future enhancement will
+unify these paths.
 """
 
 from __future__ import annotations
@@ -38,12 +45,12 @@ _ROLLUP_LENS_PK = {
 
 # For the direct path: (date-anchor column, base WHERE predicate)
 _DIRECT_DATE_COL = {
-    "count_open":         ("last_seen",   "state = 'OPEN'"),
-    "count_new":          ("first_seen",  "state = 'OPEN'"),
-    "count_fixed":        ("closed_at",   "state = 'CLOSED'"),
-    "count_regressed":    ("reopened_at", "reopened_at IS NOT NULL"),
-    "count_distinct_cve": ("last_seen",   "state = 'OPEN'"),
-    "mttr":               ("closed_at",   "state = 'CLOSED'"),
+    "count_open":         ("finding_state.last_seen",   "finding_state.state = 'OPEN'"),
+    "count_new":          ("finding_state.first_seen",  "finding_state.state = 'OPEN'"),
+    "count_fixed":        ("finding_state.closed_at",   "finding_state.state = 'CLOSED'"),
+    "count_regressed":    ("finding_state.reopened_at", "finding_state.reopened_at IS NOT NULL"),
+    "count_distinct_cve": ("finding_state.last_seen",   "finding_state.state = 'OPEN'"),
+    "mttr":               ("finding_state.closed_at",   "finding_state.state = 'CLOSED'"),
 }
 
 _DIRECT_AGGREGATE = {
@@ -51,19 +58,77 @@ _DIRECT_AGGREGATE = {
     "count_new":          "COUNT(*)",
     "count_fixed":        "COUNT(*)",
     "count_regressed":    "COUNT(*)",
-    "count_distinct_cve": "COUNT(DISTINCT cve_id)",
-    "mttr":               "AVG(days_open)",
+    "count_distinct_cve": "COUNT(DISTINCT finding_state.cve_id)",
+    "mttr":               "AVG(finding_state.days_open)",
+}
+
+# Direct-path join SQL per lens. Empty string = no join needed.
+_LENS_JOIN_SQL = {
+    "Image":      "",  # image_id is on finding_state
+    "CVE":        "",  # cve_id is on finding_state
+    "Package":    "",  # package_name is on finding_state
+    "Repository": (
+        "JOIN image_in_repository iir ON iir.image_id = finding_state.image_id"
+    ),
+    "Workload": (
+        "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
+        "  AND wri.date = CAST(finding_state.last_seen AS DATE)"
+    ),
+    "Cluster": (
+        "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
+        "  AND wri.date = CAST(finding_state.last_seen AS DATE)"
+    ),
+    "Namespace": (
+        "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
+        "  AND wri.date = CAST(finding_state.last_seen AS DATE)"
+    ),
+    "Team": (
+        "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
+        "  AND wri.date = CAST(finding_state.last_seen AS DATE) "
+        "JOIN workload_owned_by wo ON wo.cluster_name = wri.cluster_name "
+        "  AND wo.namespace_name = wri.namespace_name "
+        "  AND wo.workload_type = wri.workload_type "
+        "  AND wo.workload_name = wri.workload_name"
+    ),
+    "Owner": (
+        "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
+        "  AND wri.date = CAST(finding_state.last_seen AS DATE) "
+        "JOIN workload_owned_by wo ON wo.cluster_name = wri.cluster_name "
+        "  AND wo.namespace_name = wri.namespace_name "
+        "  AND wo.workload_type = wri.workload_type "
+        "  AND wo.workload_name = wri.workload_name"
+    ),
+}
+
+# Per-lens PK column (qualified with table alias) → unqualified alias for SELECT/GROUP BY
+_DIRECT_LENS_PK_COL = {
+    "Image":      "finding_state.image_id",
+    "CVE":        "finding_state.cve_id",
+    "Package":    "finding_state.package_name",
+    "Repository": "iir.repository",
+    "Workload":   "wri.workload_name",
+    "Cluster":    "wri.cluster_name",
+    "Namespace":  "wri.namespace_name",
+    "Team":       "wo.team_id",
+    "Owner":      "wo.owner_id",
 }
 
 
-def _resolve_window(query: Query) -> tuple[date, date]:
+def _resolve_window(query: Query, conn) -> tuple[date, date]:
     tw = query.time
     if tw.mode == "date_range":
         return tw.start, tw.end
     if tw.mode == "last_n_snapshots":
-        end = date.today()
-        start = end - timedelta(days=tw.n - 1)
-        return start, end
+        rows = conn.execute(
+            "SELECT DISTINCT CAST(snapshot_at AS DATE) as d "
+            "FROM snapshot ORDER BY d DESC LIMIT ?",
+            [tw.n]
+        ).fetchall()
+        if not rows:
+            # No snapshots ingested yet — return an empty range (same date, no data)
+            return date.today(), date.today()
+        dates = sorted(r[0] for r in rows)
+        return dates[0], dates[-1]
     # all_time — broad historical range
     return date(2020, 1, 1), date.today()
 
@@ -94,15 +159,26 @@ def _build_filter_clause(filters) -> tuple[str, list]:
     return " AND " + " AND ".join(clauses), params
 
 
+def _compute_missing_days(conn, start: date, end: date) -> list[date]:
+    """Calendar dates in [start, end] where no snapshot was ingested."""
+    rows = conn.execute(
+        "SELECT DISTINCT CAST(snapshot_at AS DATE) as d "
+        "FROM snapshot "
+        "WHERE CAST(snapshot_at AS DATE) BETWEEN ? AND ?",
+        [start, end]
+    ).fetchall()
+    ingested = {r[0] for r in rows}
+    spine = set(_date_spine(start, end))
+    return sorted(spine - ingested)
+
+
 def _rows_to_series(
     rows: list,
     col_names: list[str],
     pk_col: str,
     group_by: list[str],
-    all_dates: set[date],
-) -> tuple[list[Series], list[date]]:
-    """Convert raw DB rows into Series objects and compute missing days."""
-    seen_dates: set[date] = set()
+) -> list[Series]:
+    """Convert raw DB rows into Series objects."""
     groups: dict[tuple, tuple[list, list]] = {}
 
     for row in rows:
@@ -120,11 +196,8 @@ def _rows_to_series(
             row_date = date.fromisoformat(str(row_date))
         groups[group_key][0].append(row_date)
         groups[group_key][1].append(row_dict["value"])
-        seen_dates.add(row_date)
 
-    series = [Series(key=dict(k), x=v[0], y=v[1]) for k, v in groups.items()]
-    missing = sorted(all_dates - seen_dates)
-    return series, missing
+    return [Series(key=dict(k), x=v[0], y=v[1]) for k, v in groups.items()]
 
 
 def _compile_rollup(
@@ -148,9 +221,9 @@ def _compile_rollup(
 
     rows = conn.execute(sql, [start, end] + filter_params).fetchall()
     col_names = [d[0] for d in conn.description]
-    all_dates = set(_date_spine(start, end))
 
-    series, missing = _rows_to_series(rows, col_names, pk_col, query.group_by, all_dates)
+    series = _rows_to_series(rows, col_names, pk_col, query.group_by)
+    missing = _compute_missing_days(conn, start, end)
     exec_ms = int((time.monotonic() - t0) * 1000)
     return QueryResult(
         series=series,
@@ -165,10 +238,12 @@ def _compile_direct(
     query: Query, conn, start: date, end: date
 ) -> QueryResult:
     t0 = time.monotonic()
-    lens_meta = LENSES[query.lens]
-    pk = lens_meta["pk"]
-    # For compound PKs use the first element as the grouping key
-    pk_col = pk if isinstance(pk, str) else pk[0]
+
+    # Resolve per-lens join and PK column
+    join_sql = _LENS_JOIN_SQL.get(query.lens, "")
+    qualified_pk = _DIRECT_LENS_PK_COL.get(query.lens, "finding_state.image_id")
+    # Unqualified alias for SELECT column name and GROUP BY
+    pk_col = qualified_pk.split(".")[-1]
 
     date_col, base_predicate = _DIRECT_DATE_COL[query.measure]
     aggregate = _DIRECT_AGGREGATE[query.measure]
@@ -178,20 +253,23 @@ def _compile_direct(
     if query.group_by:
         group_cols_sql = ", " + ", ".join(query.group_by)
 
+    join_clause = f"\n{join_sql}" if join_sql else ""
+
+    date_expr = f"CAST({date_col} AS DATE)"
     sql = (
-        f"SELECT CAST({date_col} AS DATE) AS date, {pk_col}{group_cols_sql}, {aggregate} AS value "
-        f"FROM finding_state "
+        f"SELECT {date_expr} AS date, {qualified_pk} AS {pk_col}{group_cols_sql}, {aggregate} AS value "
+        f"FROM finding_state{join_clause} "
         f"WHERE {base_predicate} "
-        f"  AND CAST({date_col} AS DATE) BETWEEN ? AND ?{filter_sql} "
-        f"GROUP BY date, {pk_col}{group_cols_sql} "
+        f"  AND {date_expr} BETWEEN ? AND ?{filter_sql} "
+        f"GROUP BY {date_expr}, {qualified_pk}{group_cols_sql} "
         f"ORDER BY date"
     )
 
     rows = conn.execute(sql, [start, end] + filter_params).fetchall()
     col_names = [d[0] for d in conn.description]
-    all_dates = set(_date_spine(start, end))
 
-    series, missing = _rows_to_series(rows, col_names, pk_col, query.group_by, all_dates)
+    series = _rows_to_series(rows, col_names, pk_col, query.group_by)
+    missing = _compute_missing_days(conn, start, end)
     exec_ms = int((time.monotonic() - t0) * 1000)
     return QueryResult(
         series=series,
@@ -207,7 +285,7 @@ def compile(query: Query, conn) -> QueryResult:
 
     Never raises on empty results — returns a QueryResult with an empty series list.
     """
-    start, end = _resolve_window(query)
+    start, end = _resolve_window(query, conn)
     rollup_table = can_use_rollup(query)
     if rollup_table:
         return _compile_rollup(query, conn, rollup_table, start, end)

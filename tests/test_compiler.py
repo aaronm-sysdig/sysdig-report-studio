@@ -215,50 +215,118 @@ def test_empty_result_returns_empty_series(seeded_db):
 # in missing_days when querying for all 3 days.
 # ---------------------------------------------------------------------------
 
-def test_missing_days_detected():
+def test_missing_days_detected_from_snapshot_table():
+    """missing_days reflects calendar dates with no snapshot ingested,
+    not dates with no matching findings."""
     conn = duckdb.connect(":memory:")
     create_schema(conn)
 
+    # Simulate ingesting snapshots on day 1 and day 3 (skipping day 2)
     conn.execute(
-        "INSERT INTO image VALUES ('sha256:bbb', 'linux', NOW(), NOW(), 'repo2', 'latest')"
-    )
-    conn.execute(
-        "INSERT INTO cve VALUES ('CVE-2025-0001', NULL, NULL, 'v3', 'High', NULL, NULL, FALSE, NOW(), NOW())"
-    )
-
-    # Insert findings with last_seen on day 1 and day 3 only (skip day 2)
-    conn.execute(
-        """
-        INSERT INTO finding_state VALUES
-        (10, 'sha256:bbb', 'CVE-2025-0001', 'libssl', '1.0', '/lib',
-         'High', 7.0, FALSE, FALSE, NULL, FALSE, FALSE,
-         '2026-06-01'::TIMESTAMPTZ, '2026-06-01'::TIMESTAMPTZ,
-         'OPEN', 'NEW', NULL, NULL, 0, 1, FALSE),
-        (11, 'sha256:bbb', 'CVE-2025-0001', 'libssl', '1.0', '/lib',
-         'High', 7.0, FALSE, FALSE, NULL, FALSE, FALSE,
-         '2026-06-01'::TIMESTAMPTZ, '2026-06-03'::TIMESTAMPTZ,
-         'OPEN', 'NEW', NULL, NULL, 0, 3, FALSE)
-        """
+        "INSERT INTO snapshot (snapshot_id, snapshot_at, source_filename, row_count, ingested_at) VALUES "
+        "('snap1', '2026-06-01 12:00:00+00'::TIMESTAMPTZ, 'day1.csv', 100, NOW()), "
+        "('snap3', '2026-06-03 12:00:00+00'::TIMESTAMPTZ, 'day3.csv', 100, NOW())"
     )
 
-    # Direct path (count_new is in rollup but Image table needs rollup data;
-    # use count_distinct_cve to force direct path with no rollup dependency)
     q = Query(
         lens="Image",
         traversal=[],
-        time=TimeWindow(
-            mode="date_range",
-            start=date(2026, 6, 1),
-            end=date(2026, 6, 3),
-            granularity="day",
-        ),
-        measure="count_distinct_cve",
+        time=TimeWindow(mode="date_range", start=date(2026, 6, 1), end=date(2026, 6, 3), granularity="day"),
+        measure="count_open",
         filters=[],
     )
     result = sas_compile(q, conn)
     conn.close()
 
-    # The date spine is [2026-06-01, 2026-06-02, 2026-06-03].
-    # last_seen (date anchor for count_distinct_cve) has data on 2026-06-01 and 2026-06-03
-    # but nothing on 2026-06-02 → 2026-06-02 should be missing.
     assert date(2026, 6, 2) in result.missing_days
+    assert date(2026, 6, 1) not in result.missing_days
+    assert date(2026, 6, 3) not in result.missing_days
+
+
+# ---------------------------------------------------------------------------
+# Bug 1 — last_n_snapshots must use the snapshot table, not date.today()
+# ---------------------------------------------------------------------------
+
+def test_last_n_snapshots_uses_snapshot_table():
+    """last_n_snapshots should query the snapshot table, not date.today()."""
+    conn = duckdb.connect(":memory:")
+    create_schema(conn)
+
+    # Insert snapshots on specific historical dates
+    conn.execute(
+        "INSERT INTO snapshot (snapshot_id, snapshot_at, source_filename, row_count, ingested_at) VALUES "
+        "('s1', '2025-01-01 12:00:00+00'::TIMESTAMPTZ, 'd1.csv', 100, NOW()), "
+        "('s2', '2025-01-02 12:00:00+00'::TIMESTAMPTZ, 'd2.csv', 100, NOW()), "
+        "('s3', '2025-01-03 12:00:00+00'::TIMESTAMPTZ, 'd3.csv', 100, NOW())"
+    )
+
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=2, granularity="day"),
+        measure="count_open",
+        filters=[],
+    )
+    result = sas_compile(q, conn)
+    conn.close()
+
+    # Expected range: last 2 snapshots = 2025-01-02 to 2025-01-03
+    assert result.snapshot_range[0] == date(2025, 1, 2)
+    assert result.snapshot_range[1] == date(2025, 1, 3)
+
+
+def test_last_n_snapshots_empty_db_returns_safe_range():
+    """No snapshots ingested yet — shouldn't crash, should return empty range."""
+    conn = duckdb.connect(":memory:")
+    create_schema(conn)
+    q = Query(
+        lens="Image", traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=5, granularity="day"),
+        measure="count_open", filters=[],
+    )
+    result = sas_compile(q, conn)
+    conn.close()
+    assert result.series == []
+
+
+# ---------------------------------------------------------------------------
+# Bug 2 — direct path must join for Workload lens
+# ---------------------------------------------------------------------------
+
+def test_direct_path_workload_lens_works():
+    """Workload lens requires a join to workload_runs_image_daily.
+    Before Bug 2 fix this would raise a DuckDB error about missing column."""
+    conn = duckdb.connect(":memory:")
+    create_schema(conn)
+    # Minimal seed: one snapshot + one finding + one workload-image run
+    conn.execute(
+        "INSERT INTO snapshot VALUES ('s1', '2026-05-01 12:00:00+00'::TIMESTAMPTZ, 'd.csv', 1, NOW())"
+    )
+    conn.execute(
+        "INSERT INTO image VALUES ('sha256:x', 'linux', NOW(), NOW(), 'repo', 'v1')"
+    )
+    conn.execute(
+        "INSERT INTO cve VALUES ('CVE-2026-1', NULL, NULL, 'v3', 'High', NULL, NULL, FALSE, NOW(), NOW())"
+    )
+    conn.execute(
+        "INSERT INTO workload_runs_image_daily VALUES ('2026-05-01', 'c1', 'ns1', 'Deployment', 'wl1', 'main', 'sha256:x', 1)"
+    )
+    conn.execute(
+        "INSERT INTO finding_state VALUES "
+        "(100, 'sha256:x', 'CVE-2026-1', 'pkg', '1.0', '/p', 'High', 7.0, FALSE, FALSE, NULL, FALSE, FALSE, "
+        "'2026-05-01 12:00:00+00'::TIMESTAMPTZ, '2026-05-01 12:00:00+00'::TIMESTAMPTZ, "
+        "'OPEN', 'NEW', NULL, NULL, 0, 0, FALSE)"
+    )
+
+    q = Query(
+        lens="Workload", traversal=[],
+        time=TimeWindow(mode="date_range", start=date(2026, 5, 1), end=date(2026, 5, 1), granularity="day"),
+        measure="count_distinct_cve", filters=[],
+    )
+    result = sas_compile(q, conn)
+    conn.close()
+
+    # Should run without raising and return at least one series keyed by workload_name
+    assert result.exec_time_ms >= 0
+    assert len(result.series) >= 1
+    assert "workload_name" in result.series[0].key
