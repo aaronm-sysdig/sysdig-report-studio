@@ -3,18 +3,15 @@
  * All methods are async and throw on non-2xx responses.
  */
 
-import type { components, operations } from "./types";
+import type { components } from "./types";
 
-// Re-export the commonly-used request types so consumers don't need to dig through components
+// Re-export the commonly-used types so consumers don't need to dig through components
 export type QueryIn = components["schemas"]["QueryIn"];
 export type TimeWindowIn = components["schemas"]["TimeWindowIn"];
 export type FilterIn = components["schemas"]["FilterIn"];
 export type OrderingIn = components["schemas"]["OrderingIn"];
-
-// QueryResult is not a named Pydantic schema — the API returns a free-form dict.
-// Derive it from the generated operation response type.
-export type QueryResult =
-  operations["run_query_api_query_post"]["responses"][200]["content"]["application/json"];
+export type QueryResult = components["schemas"]["QueryResultOut"];
+export type Series = components["schemas"]["SeriesOut"];
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
