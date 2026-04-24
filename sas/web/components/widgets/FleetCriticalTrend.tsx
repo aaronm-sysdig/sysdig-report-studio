@@ -115,14 +115,17 @@ function buildChartOption(result: QueryResult, axisLabels: boolean): object {
     series: [
       {
         type: "line",
-        step: "end",
+        smooth: 0.4,
         data: counts,
         lineStyle: { color: "#01353E", width: 2 },
         itemStyle: { color: "#01353E" },
         symbol: "circle",
-        symbolSize: 4,
-        showSymbol: false,
-        emphasis: { scale: false },
+        symbolSize: 5,
+        showSymbol: true,
+        emphasis: {
+          scale: 1.4,
+          itemStyle: { borderColor: "#FFFFFF", borderWidth: 2 },
+        },
         connectNulls: false,
       },
     ],
