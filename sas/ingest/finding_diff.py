@@ -25,7 +25,7 @@ from sas.ingest.reason_code import ReasonContext, compute_reason_code
 
 _DRIFT_COLUMNS = {
     "severity", "cvss_score", "fix_available", "fix_version",
-    "risk_accepted", "public_exploit", "in_use",
+    "risk_accepted", "public_exploit", "in_use", "cisa_kev_known_ransomware",
 }
 
 
@@ -54,6 +54,7 @@ def _row_to_fs_values(r, snapshot_at: datetime):  # noqa: ARG001
         ),
         "risk_accepted": bool(r["risk_accepted"]),
         "public_exploit": bool(r["public_exploit"]),
+        "cisa_kev_known_ransomware": bool(r["cisa_kev_known_ransomware"]),  # NEW
     }
 
 
@@ -102,12 +103,13 @@ def diff_and_apply_findings(
                 UPDATE finding_state SET
                   last_seen = ?, severity = ?, cvss_score = ?, in_use = ?,
                   fix_available = ?, fix_version = ?, risk_accepted = ?,
-                  public_exploit = ?, days_open = ?
+                  public_exploit = ?, cisa_kev_known_ransomware = ?, days_open = ?
                 WHERE finding_id = ?
                 """,
                 [snapshot_at, v["severity"], v["cvss_score"], v["in_use"],
                  v["fix_available"], v["fix_version"], v["risk_accepted"],
-                 v["public_exploit"], days_open, prior["finding_id"]],
+                 v["public_exploit"], v["cisa_kev_known_ransomware"],
+                 days_open, prior["finding_id"]],
             )
             counts["reseen"] += 1
         else:
@@ -173,18 +175,20 @@ def _insert_finding_row(
         INSERT INTO finding_state (
           finding_id, image_id, cve_id, package_name, package_version,
           package_path, severity, cvss_score, in_use, fix_available,
-          fix_version, risk_accepted, public_exploit, first_seen, last_seen,
+          fix_version, risk_accepted, public_exploit, cisa_kev_known_ransomware,
+          first_seen, last_seen,
           state, reason_code, closed_at, reopened_at, reopen_count,
           days_open, is_regression
         ) VALUES (
-          nextval('seq_finding_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          nextval('seq_finding_id'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           ?, ?, 'OPEN', NULL, NULL, ?, ?, 0, ?
         )
         """,
         [v["image_id"], v["cve_id"], v["package_name"], v["package_version"],
          v["package_path"], v["severity"], v["cvss_score"], v["in_use"],
          v["fix_available"], v["fix_version"], v["risk_accepted"],
-         v["public_exploit"], snapshot_at, snapshot_at,
+         v["public_exploit"], v["cisa_kev_known_ransomware"],
+         snapshot_at, snapshot_at,
          reopened_at, reopen_count, is_regression],
     )
 

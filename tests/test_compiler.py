@@ -36,15 +36,15 @@ def seeded_db():
         """
         INSERT INTO finding_state VALUES
         (1, 'sha256:aaa', 'CVE-2024-0001', 'openssl', '1.0', '/usr/lib',
-         'Critical', 9.8, TRUE,  TRUE,  '1.1',  FALSE, TRUE,
+         'Critical', 9.8, TRUE,  TRUE,  '1.1',  FALSE, TRUE, FALSE,
          '2026-04-01'::TIMESTAMPTZ, '2026-04-10'::TIMESTAMPTZ,
          'OPEN', 'NEW', NULL, NULL, 0, 9, FALSE),
         (2, 'sha256:aaa', 'CVE-2024-0002', 'curl', '7.0', '/usr/bin',
-         'High', 7.5, FALSE, FALSE, NULL, FALSE, FALSE,
+         'High', 7.5, FALSE, FALSE, NULL, FALSE, FALSE, FALSE,
          '2026-04-05'::TIMESTAMPTZ, '2026-04-10'::TIMESTAMPTZ,
          'OPEN', 'NEW', NULL, NULL, 0, 5, FALSE),
         (3, 'sha256:aaa', 'CVE-2024-0003', 'zlib', '1.2', '/lib',
-         'Medium', 5.0, FALSE, FALSE, NULL, FALSE, FALSE,
+         'Medium', 5.0, FALSE, FALSE, NULL, FALSE, FALSE, FALSE,
          '2026-04-03'::TIMESTAMPTZ, '2026-04-08'::TIMESTAMPTZ,
          'CLOSED', 'PATCHED', '2026-04-08'::TIMESTAMPTZ, NULL, 0, 5, FALSE)
         """
@@ -329,7 +329,7 @@ def test_direct_path_workload_lens_works():
     )
     conn.execute(
         "INSERT INTO finding_state VALUES "
-        "(100, 'sha256:x', 'CVE-2026-1', 'pkg', '1.0', '/p', 'High', 7.0, FALSE, FALSE, NULL, FALSE, FALSE, "
+        "(100, 'sha256:x', 'CVE-2026-1', 'pkg', '1.0', '/p', 'High', 7.0, FALSE, FALSE, NULL, FALSE, FALSE, FALSE, "
         "'2026-05-01 12:00:00+00'::TIMESTAMPTZ, '2026-05-01 12:00:00+00'::TIMESTAMPTZ, "
         "'OPEN', 'NEW', NULL, NULL, 0, 0, FALSE)"
     )

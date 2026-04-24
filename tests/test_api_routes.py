@@ -35,7 +35,7 @@ def client_with_db():
     conn.execute("""
         INSERT INTO finding_state VALUES
         (1, 'sha256:abc', 'CVE-2025-0001', 'openssl', '1.0', '/usr/lib', 'Critical', 9.8,
-         TRUE, TRUE, '1.1', FALSE, TRUE,
+         TRUE, TRUE, '1.1', FALSE, TRUE, FALSE,
          '2026-04-20'::TIMESTAMP, '2026-04-23'::TIMESTAMP, 'OPEN', 'NEW', NULL, NULL, 0, 3, FALSE)
     """)
 

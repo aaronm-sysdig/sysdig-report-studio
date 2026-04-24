@@ -203,6 +203,7 @@ _DDL = [
         fix_version VARCHAR,
         risk_accepted BOOLEAN,
         public_exploit BOOLEAN,
+        cisa_kev_known_ransomware BOOLEAN DEFAULT FALSE,
         first_seen TIMESTAMPTZ,
         last_seen TIMESTAMPTZ,
         state VARCHAR,
@@ -291,3 +292,15 @@ def create_schema(conn) -> None:
     """Create all SAS tables. Idempotent — safe to call on an existing DB."""
     for stmt in _DDL:
         conn.execute(stmt)
+
+
+def migrate_schema(conn) -> None:
+    """Apply schema migrations for databases created before Phase 2.2.
+
+    Safe to call on a fresh DB (columns already present) or an existing DB
+    (ALTER TABLE ADD COLUMN IF NOT EXISTS is idempotent in DuckDB).
+    """
+    conn.execute(
+        "ALTER TABLE finding_state "
+        "ADD COLUMN IF NOT EXISTS cisa_kev_known_ransomware BOOLEAN DEFAULT FALSE"
+    )

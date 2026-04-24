@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 
 from sas.ingest.config import get_config
-from sas.ingest.schema import create_schema
+from sas.ingest.schema import create_schema, migrate_schema
 from sas.ingest.ownership import (
     ResolverChain, LabelStrategy, MappingFileStrategy, NamespaceFallback,
 )
@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     conn = duckdb.connect(str(cfg.duckdb_path))
     try:
         create_schema(conn)
+        migrate_schema(conn)
         result = run_pipeline(
             conn=conn, csv_path=args.csv,
             resolver=resolver, force=args.force,
