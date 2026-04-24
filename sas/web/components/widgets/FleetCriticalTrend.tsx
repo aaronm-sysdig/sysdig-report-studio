@@ -21,10 +21,8 @@ const FLEET_CRITICAL_QUERY: QueryIn = {
     n: 90,
     granularity: "day",
   },
-  measure: "count_open",
-  filters: [
-    { field: "severity", operator: "eq", value: "Critical" },
-  ],
+  measure: "count_open_critical",
+  filters: [],
   group_by: [],
   order_by: null,
   limit: null,
