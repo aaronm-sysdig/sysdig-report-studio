@@ -24,6 +24,7 @@ Phase 3 inherits all tenets from the main design doc §2 without modification. T
 - **Page-stack drill-in is the aspiration, not the contract.** Visual stacking with perspective transform is the approved target. If implementation cost during Phase 3.3 exceeds plain routing by more than ~$5 of budget, revert to full-page navigation. The drill-in URL structure and breadcrumb logic are the same either way — only the animation differs.
 - **Gmail Compact density.** 15–20% tighter than native Sysdig UI. Every density value lives in `tokens.css`. All widgets use the same token set — no widget gets special spacing exemptions.
 - **Two-pass iteration is budgeted.** UI always needs 2–3 rounds. Phase 3.1 ships something testable early. Visual tuning rounds are expected, not failures.
+- **British English spelling throughout user-facing text.** "organise" not "organize", "colour" not "color", "behaviour" not "behavior", "centre" not "center", "analyse" not "analyze", etc. This applies to every widget label, button text, placeholder, empty-state message, auto-generated narrative sentence, admin UI string, error message, and tooltip. Code identifiers (CSS properties, variable names, API field names) stay in American English where standard (`color:`, `center:`, `initialize`) — only user-facing strings. Configure linters (e.g., `cspell` with `@cspell/dict-en-gb`) to enforce this in CI where feasible.
 
 ---
 
