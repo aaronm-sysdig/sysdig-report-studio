@@ -25,9 +25,6 @@
   --color-grey-70: var(--grey-70);
   --color-grey-80: var(--grey-80);
   --color-grey-90: var(--grey-90);
-  --font-sans: var(--font-sans);
-  --radius: var(--radius);
-  --shadow-card: var(--shadow-card);
 }
 
 *,
