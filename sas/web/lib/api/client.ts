@@ -57,3 +57,22 @@ export async function getEntities(
   const qs = params ? "?" + new URLSearchParams(params).toString() : "";
   return apiFetch<unknown[]>(`/api/entities/${lens}${qs}`);
 }
+
+export type FindingsResponse = components["schemas"]["FindingsResponse"];
+
+/**
+ * GET /api/findings — paginated raw finding_state rows.
+ */
+export async function getFindings(opts: {
+  limit?: number;
+  offset?: number;
+  severity?: string;
+  state?: string;
+}): Promise<FindingsResponse> {
+  const params = new URLSearchParams();
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  if (opts.offset !== undefined) params.set("offset", String(opts.offset));
+  if (opts.severity) params.set("severity", opts.severity);
+  if (opts.state) params.set("state", opts.state);
+  return apiFetch<FindingsResponse>(`/api/findings?${params.toString()}`);
+}

@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from sas.api.routes import query, widgets, entities
+from sas.api.routes import query, widgets, entities, findings as findings_router
 from sas.ingest.config import get_config
 
 app = FastAPI(
@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(query.router,   prefix="/api")
 app.include_router(widgets.router, prefix="/api")
 app.include_router(entities.router, prefix="/api")
+app.include_router(findings_router.router, prefix="/api", tags=["findings"])
 
 
 @app.get("/healthz", tags=["ops"])

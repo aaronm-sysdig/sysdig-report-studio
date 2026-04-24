@@ -168,3 +168,24 @@ def test_entities_endpoint_unknown_lens_returns_422(client_with_db):
     client, _ = client_with_db
     response = client.get("/api/entities/NotALens")
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 7. GET /api/findings — paginated rows
+# ---------------------------------------------------------------------------
+
+def test_list_findings_returns_paginated(client_with_db):
+    client, conn = client_with_db
+    # The fixture seeds at least one finding via the existing setup
+    res = client.get("/api/findings?limit=10")
+    assert res.status_code == 200
+    body = res.json()
+    assert "rows" in body
+    assert "total" in body
+    assert isinstance(body["rows"], list)
+
+
+def test_list_findings_invalid_severity_returns_422(client_with_db):
+    client, _ = client_with_db
+    res = client.get("/api/findings?severity=Bogus")
+    assert res.status_code == 422
