@@ -1,26 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@import "../styles/tokens.css";
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-deep-see: var(--deep-see);
+  --color-lumin: var(--lumin);
+  --color-falco-blue: var(--falco-blue);
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-fg-primary: var(--fg-primary);
+  --color-fg-muted: var(--fg-muted);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-severity-critical: var(--severity-critical);
+  --color-severity-high: var(--severity-high);
+  --color-severity-medium: var(--severity-medium);
+  --color-severity-low: var(--severity-low);
+  --color-grey-10: var(--grey-10);
+  --color-grey-20: var(--grey-20);
+  --color-grey-40: var(--grey-40);
+  --color-grey-50: var(--grey-50);
+  --color-grey-60: var(--grey-60);
+  --color-grey-70: var(--grey-70);
+  --color-grey-80: var(--grey-80);
+  --color-grey-90: var(--grey-90);
+  --font-sans: var(--font-sans);
+  --radius: var(--radius);
+  --shadow-card: var(--shadow-card);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  color: var(--fg-primary);
+  background-color: var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color var(--dur-standard) var(--ease-standard),
+              color var(--dur-standard) var(--ease-standard);
 }

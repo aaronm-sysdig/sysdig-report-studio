@@ -1,0 +1,85 @@
+/* ==========================================================
+   SAS Design Tokens — single source of truth.
+   All components reference these custom properties.
+   Raw hex values never appear outside this file.
+   ========================================================== */
+
+:root {
+  /* --- Sysdig brand palette (mirrors sas/sysdig-brand.css) --- */
+  --white: #FFFFFF;
+  --black: #000000;
+  --deep-see: #01353E;
+  --lumin: #BDF78B;
+
+  --grey-10: #EAEBED;
+  --grey-20: #D4D6D9;
+  --grey-30: #BEC0C5;
+  --grey-40: #A8ABB1;
+  --grey-50: #92959D;
+  --grey-60: #6E7178;
+  --grey-70: #4A4D53;
+  --grey-80: #26282E;
+  --grey-90: #121217;
+
+  --falco-blue: #00CBE2;
+  --red: #FF7774;
+  --orange: #FFA940;
+  --yellow: #FDD835;
+  --purple: #CA87DA;
+
+  /* --- Severity --- */
+  --severity-critical: var(--red);
+  --severity-high: var(--orange);
+  --severity-medium: var(--yellow);
+  --severity-low: var(--grey-50);
+
+  /* --- Semantic surface tokens — light mode (default) --- */
+  --bg-base: var(--white);
+  --bg-surface: var(--grey-10);
+  --bg-sidebar: var(--deep-see);
+  --bg-sidebar-active: rgba(189, 247, 139, 0.18);
+  --bg-sidebar-hover: rgba(255, 255, 255, 0.08);
+  --fg-primary: var(--black);
+  --fg-muted: var(--grey-60);
+  --fg-on-sidebar: var(--white);
+  --fg-on-sidebar-muted: var(--grey-40);
+  --border-subtle: var(--grey-20);
+  --border-strong: var(--grey-40);
+  --accent: var(--lumin);
+
+  /* --- Density --- */
+  --h-row: 32px;
+  --p-card: 14px;
+  --gap-widget: 10px;
+  --h-topbar: 48px;
+  --h-sidebar-row: 30px;
+  --h-breadcrumb: 28px;
+  --w-sidebar: 180px;
+  --radius: 8px;
+
+  /* --- Elevation --- */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.05);
+
+  /* --- Motion --- */
+  --dur-standard: 180ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* --- Typography --- */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --text-label: 10px;
+  --text-body-sm: 11px;
+  --text-body: 13px;
+  --text-body-md: 14px;
+  --text-title: 16px;
+}
+
+/* --- Dark mode overrides (html/body[data-theme="dark"]) --- */
+[data-theme="dark"] {
+  --bg-base: var(--grey-80);
+  --bg-surface: var(--grey-90);
+  --bg-sidebar: var(--grey-90);
+  --fg-primary: var(--white);
+  --fg-muted: var(--grey-50);
+  --border-subtle: var(--grey-70);
+  --border-strong: var(--grey-60);
+}
