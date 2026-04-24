@@ -5,6 +5,14 @@ import dynamic from "next/dynamic";
 import { WidgetCard } from "./WidgetCard";
 import { runQuery } from "@/lib/api/client";
 import type { QueryIn, QueryResult } from "@/lib/api/client";
+import {
+  CHART_COLORS,
+  flowingLineSeries,
+  standardGrid,
+  standardXAxis,
+  STANDARD_Y_AXIS,
+  STANDARD_TOOLTIP_STYLE,
+} from "@/lib/charts/defaults";
 
 // echarts-for-react uses browser APIs — must be loaded client-side only
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
@@ -70,75 +78,25 @@ function buildChartOption(result: QueryResult, axisLabels: boolean): object {
     return total;
   });
 
-  const n = dates.length;
-  let labelInterval = 0;
-  if (axisLabels) {
-    if (n > 30) labelInterval = 6;
-    else if (n > 7) labelInterval = 2;
-    else labelInterval = 0;
-  }
-
   return {
     backgroundColor: "transparent",
-    grid: {
-      top: 12,
-      right: 16,
-      bottom: axisLabels ? 52 : 20,
-      left: 48,
-      containLabel: false,
-    },
-    xAxis: {
-      type: "category",
-      data: dates,
-      axisLabel: {
-        show: axisLabels,
-        interval: labelInterval,
-        rotate: n > 7 ? 45 : 0,
-        fontSize: 10,
-        color: "#6E7178",
-      },
-      axisLine: { lineStyle: { color: "#D4D6D9" } },
-      axisTick: { show: false },
-    },
-    yAxis: {
-      type: "value",
-      minInterval: 1,
-      axisLabel: {
-        fontSize: 10,
-        color: "#6E7178",
-        formatter: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)),
-      },
-      splitLine: { lineStyle: { color: "#D4D6D9", type: "dashed" } },
-      axisLine: { show: false },
-      axisTick: { show: false },
-    },
+    grid: standardGrid(axisLabels ? 32 : 0),
+    xAxis: standardXAxis(dates, axisLabels),
+    yAxis: STANDARD_Y_AXIS,
     series: [
       {
-        type: "line",
-        smooth: 0.4,
+        ...flowingLineSeries({ color: CHART_COLORS.deepSee }),
         data: counts,
-        lineStyle: { color: "#01353E", width: 2 },
-        itemStyle: { color: "#01353E" },
-        symbol: "circle",
-        symbolSize: 5,
-        showSymbol: true,
-        emphasis: {
-          scale: 1.4,
-          itemStyle: { borderColor: "#FFFFFF", borderWidth: 2 },
-        },
-        connectNulls: false,
       },
     ],
     tooltip: {
       trigger: "axis",
-      backgroundColor: "#FFFFFF",
-      borderColor: "#D4D6D9",
-      textStyle: { color: "#000000", fontSize: 11 },
+      ...STANDARD_TOOLTIP_STYLE,
       formatter: (params: unknown[]) => {
         const p = (params as Array<{ axisValue: string; value: number }>)[0];
         if (!p) return "";
         return `<div style="font-size:11px">
-          <div style="color:#6E7178;margin-bottom:2px">${p.axisValue}</div>
+          <div style="color:${CHART_COLORS.greyMuted};margin-bottom:2px">${p.axisValue}</div>
           <div><b>${p.value?.toLocaleString("en-GB") ?? "—"}</b> critical open</div>
         </div>`;
       },
