@@ -11,7 +11,10 @@ def test_all_v1_lenses_registered():
 
 
 def test_all_v1_measures_registered():
-    expected = {"count_open", "count_new", "count_fixed", "count_regressed", "count_distinct_cve", "mttr"}
+    expected = {
+        "count_open", "count_new", "count_fixed", "count_regressed", "count_distinct_cve", "mttr",
+        "count_open_critical", "count_open_high", "count_open_medium", "count_open_low",
+    }
     assert expected == set(MEASURES.keys())
 
 
@@ -59,3 +62,31 @@ def test_all_measures_have_required_columns():
         m = cls()
         assert isinstance(m.required_columns, list)
         assert len(m.required_columns) > 0
+
+
+def test_count_open_critical_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_open_critical" in MEASURES
+
+
+def test_count_open_high_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_open_high" in MEASURES
+
+
+def test_count_open_medium_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_open_medium" in MEASURES
+
+
+def test_count_open_low_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_open_low" in MEASURES
+
+
+def test_count_open_critical_builds_correct_sql():
+    from sas.query.registry import MEASURES
+    from datetime import date
+    m = MEASURES["count_open_critical"]()
+    sql = m.build_select_sql(date(2026, 4, 23))
+    assert "count_open_critical" in sql.lower()

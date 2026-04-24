@@ -63,6 +63,41 @@ class Mttr:
         )
 
 
+class CountOpenCritical:
+    name = "count_open_critical"
+    required_columns = ["count_open_critical"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_open_critical"
+
+
+class CountOpenHigh:
+    name = "count_open_high"
+    required_columns = ["count_open_high"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_open_high"
+
+
+class CountOpenMedium:
+    name = "count_open_medium"
+    required_columns = ["count_open_medium"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_open_medium"
+
+
+class CountOpenLow:
+    name = "count_open_low"
+    required_columns = ["count_open_low"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_open_low"
+
+
 # Registration — must run at import time
-for _cls in [CountOpen, CountNew, CountFixed, CountRegressed, CountDistinctCve, Mttr]:
+for _cls in [
+    CountOpen, CountNew, CountFixed, CountRegressed, CountDistinctCve, Mttr,
+    CountOpenCritical, CountOpenHigh, CountOpenMedium, CountOpenLow,
+]:
     register_measure(_cls.name, _cls)

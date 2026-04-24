@@ -293,6 +293,22 @@ def test_last_n_snapshots_empty_db_returns_safe_range():
 # Bug 2 — direct path must join for Workload lens
 # ---------------------------------------------------------------------------
 
+def test_count_open_critical_returns_rollup_data(seeded_db):
+    from sas.query.primitives import Query, TimeWindow
+    from sas.query.compiler import compile as sas_compile
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="date_range", start=date(2026, 4, 10), end=date(2026, 4, 10), granularity="day"),
+        measure="count_open_critical",
+        filters=[],
+    )
+    result = sas_compile(q, seeded_db)
+    # The seeded rollup row has count_open_critical=1 for sha256:aaa on 2026-04-10
+    assert len(result.series) == 1
+    assert result.series[0].y[0] == 1
+
+
 def test_direct_path_workload_lens_works():
     """Workload lens requires a join to workload_runs_image_daily.
     Before Bug 2 fix this would raise a DuckDB error about missing column."""

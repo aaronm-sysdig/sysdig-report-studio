@@ -6,7 +6,16 @@ The API/compiler never needs to know the routing logic — it just calls this.
 
 from sas.query.primitives import Query
 
-_ROLLUP_MEASURES = {"count_open", "count_new", "count_fixed", "count_regressed"}
+_ROLLUP_MEASURES = {
+    "count_open",
+    "count_new",
+    "count_fixed",
+    "count_regressed",
+    "count_open_critical",
+    "count_open_high",
+    "count_open_medium",
+    "count_open_low",
+}
 
 _LENS_TO_ROLLUP = {
     "Image":      "daily_metrics_by_image",

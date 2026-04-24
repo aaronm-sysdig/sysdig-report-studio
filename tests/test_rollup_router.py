@@ -94,3 +94,25 @@ def test_cluster_severity_rollup_allows_severity_filter():
         filters=[Filter(field="severity", operator="eq", value="Critical")],
     )
     assert can_use_rollup(q) == "daily_metrics_by_cluster_severity"
+
+
+def test_count_open_critical_routes_to_image_rollup():
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_open_critical",
+        filters=[],
+    )
+    assert can_use_rollup(q) == "daily_metrics_by_image"
+
+
+def test_count_open_high_routes_to_workload_rollup():
+    q = Query(
+        lens="Workload",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_open_high",
+        filters=[],
+    )
+    assert can_use_rollup(q) == "daily_metrics_by_workload"
