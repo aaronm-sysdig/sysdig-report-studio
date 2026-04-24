@@ -48,11 +48,29 @@ class QueryIn(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Pydantic models for the API response
+# ---------------------------------------------------------------------------
+
+class SeriesOut(BaseModel):
+    key: dict[str, Any]
+    x: list[str]
+    y: list[float | int | None]
+
+
+class QueryResultOut(BaseModel):
+    series: list[SeriesOut]
+    dimensions: dict[str, list[Any]]
+    snapshot_range: list[str]  # [start_iso, end_iso]
+    missing_days: list[str]
+    exec_time_ms: int
+
+
+# ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
 
-@router.post("/query", tags=["query"])
-def run_query(body: QueryIn, conn=Depends(get_db)) -> dict:
+@router.post("/query", tags=["query"], response_model=QueryResultOut)
+def run_query(body: QueryIn, conn=Depends(get_db)) -> QueryResultOut:
     """Execute a Query against DuckDB and return a QueryResult."""
     # Convert Pydantic → dataclasses
     tw = TimeWindow(
@@ -81,13 +99,13 @@ def run_query(body: QueryIn, conn=Depends(get_db)) -> dict:
 
     result = sas_compile(query, conn)
 
-    return {
-        "series": [
-            {"key": s.key, "x": [str(d) for d in s.x], "y": s.y}
+    return QueryResultOut(
+        series=[
+            SeriesOut(key=s.key, x=[str(d) for d in s.x], y=s.y)
             for s in result.series
         ],
-        "dimensions": result.dimensions,
-        "snapshot_range": [str(result.snapshot_range[0]), str(result.snapshot_range[1])],
-        "missing_days": [str(d) for d in result.missing_days],
-        "exec_time_ms": result.exec_time_ms,
-    }
+        dimensions=result.dimensions,
+        snapshot_range=[str(result.snapshot_range[0]), str(result.snapshot_range[1])],
+        missing_days=[str(d) for d in result.missing_days],
+        exec_time_ms=result.exec_time_ms,
+    )
