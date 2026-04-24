@@ -11,7 +11,8 @@ _ENTITY_QUERIES: dict[str, str] = {
     "Image": (
         "SELECT image_id AS id, "
         "COALESCE(current_repository || ':' || current_tag, image_id) AS label, "
-        "current_repository AS repository, current_tag AS tag "
+        "current_repository AS repository, current_tag AS tag, "
+        "strftime(last_seen, '%Y-%m-%dT%H:%M:%S+00:00') AS last_seen "
         "FROM image ORDER BY label"
     ),
     "CVE": (
