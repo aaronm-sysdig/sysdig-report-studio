@@ -199,8 +199,30 @@ function StatCard({ label, value, delta }: StatCardProps) {
 function buildMainChartOption(
   data: RemediationData,
   axisLabels: boolean,
+  tagRows?: TagGenealogyRow[] | null,
 ): object {
   const { dates, critical, high, medium, low, totals } = data;
+
+  // Tag markers — vertical lines at each tag's first appearance date
+  const tagMarkLines = tagRows && tagRows.length > 0
+    ? tagRows
+        .filter((r) => r.firstSeen)
+        .map((r) => ({
+          xAxis: r.firstSeen.slice(0, 10),
+          label: {
+            formatter: r.tag || r.digestPrefix.slice(0, 8),
+            position: "insideStartTop" as const,
+            fontSize: 9,
+            color: CHART_COLORS.greyMuted,
+            rotate: 45,
+          },
+          lineStyle: {
+            color: CHART_COLORS.greyBorder,
+            type: "dashed" as const,
+            width: 1,
+          },
+        }))
+    : [];
 
   return {
     backgroundColor: "transparent",
@@ -239,6 +261,10 @@ function buildMainChartOption(
         stack: "severity",
         itemStyle: { color: CHART_COLORS.severityCritical },
         barMaxWidth: 16,
+        // Tag markers drawn on this series (topmost bar = best z-order)
+        markLine: tagMarkLines.length > 0
+          ? { silent: false, symbol: ["none", "none"], data: tagMarkLines }
+          : undefined,
       },
       // Flowing total line on top — grey context line
       {
@@ -516,8 +542,12 @@ function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
     );
   }
 
-  const maxCritical = Math.max(1, ...rows.map((r) => r.critical ?? 0));
-  const maxHigh = Math.max(1, ...rows.map((r) => r.high ?? 0));
+  // Single shared denominator across both severity tiers and all rows so bars
+  // are comparable at a glance — Critical=2 vs High=17 will look proportionally correct.
+  const maxAny = Math.max(
+    1,
+    ...rows.flatMap((r) => [r.critical ?? 0, r.high ?? 0])
+  );
 
   return (
     <div
@@ -540,11 +570,11 @@ function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
       {rows.map((row, idx) => {
         const critPct =
           row.critical !== null && row.critical > 0
-            ? Math.max(6, Math.round((row.critical / maxCritical) * 100))
+            ? Math.max(4, Math.round((row.critical / maxAny) * 100))
             : 0;
         const highPct =
           row.high !== null && row.high > 0
-            ? Math.max(6, Math.round((row.high / maxHigh) * 100))
+            ? Math.max(4, Math.round((row.high / maxAny) * 100))
             : 0;
         const bothZero = (row.critical ?? 0) === 0 && (row.high ?? 0) === 0;
 
@@ -644,6 +674,7 @@ function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
                     ) : (
                       <div
                         className="flex items-center gap-1 flex-1 min-w-0"
+                        style={{ overflow: "hidden" }}
                       >
                         <div
                           style={{
@@ -1199,7 +1230,7 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
                     <ChartSkeleton height={280} />
                   ) : (
                     <ReactECharts
-                      option={buildMainChartOption(data, axisLabels)}
+                      option={buildMainChartOption(data, axisLabels, genealogyRows)}
                       style={{ height: "280px", width: "100%" }}
                       notMerge
                       lazyUpdate={false}
