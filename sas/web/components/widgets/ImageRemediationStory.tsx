@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { WidgetCard } from "./WidgetCard";
 import { runQuery, getEntities } from "@/lib/api/client";
@@ -22,8 +22,11 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 // Types
 // ---------------------------------------------------------------------------
 export interface ImageRemediationStoryProps {
-  /** If provided, skips the image picker and renders the story for this image directly. */
-  imageId?: string;
+  /**
+   * If provided, skips the repository picker and renders the story for this
+   * repository directly. Format: "owner/name" e.g. "aaronmsysdig/sysdig-notifier"
+   */
+  repository?: string;
 }
 
 interface ImageEntity {
@@ -32,6 +35,12 @@ interface ImageEntity {
   repository: string;
   tag: string;
   last_seen: string;
+  first_seen?: string;
+}
+
+interface RepositoryEntity {
+  repository: string;
+  imageCount: number;
 }
 
 interface RemediationData {
@@ -54,6 +63,23 @@ interface HeadlineMetrics {
   deltaVs7Days: number | null;
 }
 
+interface ReasonTotals {
+  patched: number;
+  retired: number;
+  accepted: number;
+  other: number;
+}
+
+interface TagGenealogyRow {
+  imageId: string;
+  tag: string;
+  digestPrefix: string;
+  firstSeen: string;
+  critical: number | null;
+  high: number | null;
+  isCurrent: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Query helpers
 // ---------------------------------------------------------------------------
@@ -63,23 +89,23 @@ const COMMON_TIME: QueryIn["time"] = {
   granularity: "day",
 };
 
-function imageQuery(measure: string, imageId: string): QueryIn {
+function repoQuery(measure: string, imageIds: string[]): QueryIn {
   return {
     lens: "Image",
     traversal: [],
     time: COMMON_TIME,
     measure,
-    filters: [{ field: "image_id", operator: "eq", value: imageId }],
+    filters: [{ field: "image_id", operator: "in", value: imageIds }],
     group_by: [],
     order_by: null,
     limit: null,
   };
 }
 
-/** Extract a single series (the image we filtered to) into {dates, values} */
+/** Extract a single series (aggregated) into {dates, values} */
 function extractSeries(result: QueryResult): { dates: string[]; values: number[] } {
   if (!result.series.length) return { dates: [], values: [] };
-  // With an image_id filter there should be exactly 1 series — take it
+  // With no group_by, the backend returns one aggregated series
   const s = result.series[0];
   return { dates: s.x as string[], values: s.y as number[] };
 }
@@ -182,7 +208,6 @@ function buildMainChartOption(
     xAxis: standardXAxis(dates, axisLabels),
     yAxis: STANDARD_Y_AXIS,
     series: [
-      // Stacked bars — order: Negligible/Low at bottom, Critical at top
       {
         type: "bar",
         name: "Low",
@@ -273,7 +298,6 @@ function buildFlowChartOption(
     grid: { top: 8, right: 16, bottom: axisLabels ? 36 : 8, left: 48, containLabel: false },
     xAxis: {
       ...standardXAxis(dates, axisLabels),
-      // Mirror the main chart x-axis exactly so columns align
     },
     yAxis: {
       type: "value" as const,
@@ -336,7 +360,7 @@ function buildFlowChartOption(
 }
 
 // ---------------------------------------------------------------------------
-// Reason-code decomposition bar — segmented by patched / retired / accepted / other
+// Reason-code decomposition bar
 // ---------------------------------------------------------------------------
 interface ReasonBarProps {
   patched: number;
@@ -351,7 +375,7 @@ function ReasonCodeBar({ patched, retired, accepted, other }: ReasonBarProps) {
   if (total === 0) {
     return (
       <div className="text-xs italic" style={{ color: "var(--fg-muted)" }}>
-        No findings closed in this window for this image.
+        No findings closed in this window for this repository.
       </div>
     );
   }
@@ -365,7 +389,6 @@ function ReasonCodeBar({ patched, retired, accepted, other }: ReasonBarProps) {
 
   return (
     <div>
-      {/* Header label */}
       <div
         className="text-[10px] font-medium tracking-widest uppercase mb-1.5"
         style={{ color: "var(--fg-muted)" }}
@@ -373,7 +396,6 @@ function ReasonCodeBar({ patched, retired, accepted, other }: ReasonBarProps) {
         Why {total.toLocaleString("en-GB")} closed?
       </div>
 
-      {/* Segmented bar */}
       <div
         className="flex w-full h-7 overflow-hidden"
         style={{ borderRadius: "var(--radius)" }}
@@ -394,7 +416,6 @@ function ReasonCodeBar({ patched, retired, accepted, other }: ReasonBarProps) {
         ))}
       </div>
 
-      {/* Legend */}
       <div
         className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[10px]"
         style={{ color: "var(--fg-muted)" }}
@@ -414,129 +435,72 @@ function ReasonCodeBar({ patched, retired, accepted, other }: ReasonBarProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-narrative
+// Auto-narrative — repository-centric
 // ---------------------------------------------------------------------------
-interface ReasonTotals {
-  patched: number;
-  retired: number;
-  accepted: number;
-  other: number;
-}
-
-function buildNarrative(metrics: HeadlineMetrics, reason?: ReasonTotals): string {
+function buildNarrative(
+  repoName: string,
+  metrics: HeadlineMetrics,
+  tagCount: number,
+  latestTag: string | null,
+  reason?: ReasonTotals,
+): string {
   const { totalNew, totalFixed, totalRegressed } = metrics;
-  const netImprovement = totalFixed - totalNew;
 
   if (totalNew === 0 && totalFixed === 0 && totalRegressed === 0) {
-    return "In the last 90 days, this image's posture has been unchanged — no new findings, no closures, no regressions.";
+    return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — no new findings, closures, or regressions recorded in the last 90 days.`;
   }
 
   if (totalRegressed > totalFixed && totalFixed < 2) {
-    return `In the last 90 days, ${totalRegressed.toLocaleString("en-GB")} finding${totalRegressed !== 1 ? "s" : ""} regressed for this image whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed. Worth a look.`;
+    return `The \`${repoName}\` repository (${tagCount} tag${tagCount !== 1 ? "s" : ""}) regressed ${totalRegressed.toLocaleString("en-GB")} finding${totalRegressed !== 1 ? "s" : ""} whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed across all tags. Worth a look.`;
   }
 
-  // Per-reason narrative when breakdown data is available
   if (reason && totalFixed > 0) {
     const { patched, retired, accepted } = reason;
     const totalClosed = patched + retired + accepted + reason.other;
 
     if (totalClosed > 0) {
-      // Patched dominates — real engineering work
       if (patched > retired + accepted + reason.other) {
-        return `In the last 90 days, this image has been getting better — ${patched.toLocaleString("en-GB")} findings patched (real fixes)${retired > 0 ? `, ${retired.toLocaleString("en-GB")} retired` : ""}.`;
+        return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — in the last 90 days ${patched.toLocaleString("en-GB")} findings were patched (real fixes)${retired > 0 ? `, ${retired.toLocaleString("en-GB")} retired` : ""}${latestTag ? ` with \`${latestTag}\` as the most recent tag` : ""}.`;
       }
 
-      // Retired dominates — image churn rather than genuine fixing
       if (retired > patched) {
-        return `In the last 90 days, ${retired.toLocaleString("en-GB")} findings disappeared because the image was retired, vs only ${patched.toLocaleString("en-GB")} actually patched. Worth investigating.`;
+        return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${retired.toLocaleString("en-GB")} findings disappeared via image retirement vs only ${patched.toLocaleString("en-GB")} actually patched. Worth investigating.`;
       }
 
-      // Accepted is meaningful (>10% of closed)
       if (accepted > 0 && accepted / totalClosed > 0.1) {
-        return `In the last 90 days, ${accepted.toLocaleString("en-GB")} findings were risk-accepted whilst only ${patched.toLocaleString("en-GB")} were patched.`;
+        return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${accepted.toLocaleString("en-GB")} findings were risk-accepted whilst only ${patched.toLocaleString("en-GB")} were patched across all tags.`;
       }
     }
   }
 
+  const netImprovement = totalFixed - totalNew;
+
   if (netImprovement > 0 && totalFixed > 2) {
-    return `In the last 90 days, this image has been getting better — ${totalFixed.toLocaleString("en-GB")} findings closed${totalRegressed > 0 ? `, ${totalRegressed.toLocaleString("en-GB")} regressed` : ", no regressions"}.`;
+    return `The \`${repoName}\` repository (${tagCount} tag${tagCount !== 1 ? "s" : ""}) has been improving — ${totalFixed.toLocaleString("en-GB")} findings closed${totalRegressed > 0 ? `, ${totalRegressed.toLocaleString("en-GB")} regressed` : ", no regressions"} in the last 90 days.`;
   }
 
   if (totalNew > totalFixed && totalNew > 5) {
-    return `In the last 90 days, ${totalNew.toLocaleString("en-GB")} new findings appeared on this image whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed — the backlog is growing.`;
+    return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${totalNew.toLocaleString("en-GB")} new findings appeared whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed in the last 90 days. The backlog is growing.`;
   }
 
-  return `In the last 90 days, ${totalNew.toLocaleString("en-GB")} new, ${totalFixed.toLocaleString("en-GB")} fixed, and ${totalRegressed.toLocaleString("en-GB")} regressed for this image.`;
+  return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${totalNew.toLocaleString("en-GB")} new, ${totalFixed.toLocaleString("en-GB")} fixed, and ${totalRegressed.toLocaleString("en-GB")} regressed across all tags in the last 90 days.`;
 }
 
 // ---------------------------------------------------------------------------
-// Tag lineage panel
+// Tag Genealogy Panel
 // ---------------------------------------------------------------------------
-interface TagEntry {
-  id: string;
-  label: string;
-  repository: string;
-  tag: string;
-  last_seen: string;
-  criticalCount: number | null;
+interface TagGenealogyPanelProps {
+  rows: TagGenealogyRow[] | null;
 }
 
-interface TagLineagePanelProps {
-  selectedId: string;
-  allImages: ImageEntity[];
-  repository: string;
-}
-
-function TagLineagePanel({ selectedId, allImages, repository }: TagLineagePanelProps) {
-  const [tags, setTags] = useState<TagEntry[] | null>(null);
-
-  useEffect(() => {
-    if (!repository) return;
-
-    // Filter all images to the same repo
-    const repoImages = allImages
-      .filter((img) => img.repository === repository)
-      .sort((a, b) => a.last_seen.localeCompare(b.last_seen));
-
-    if (repoImages.length === 0) {
-      setTags([]);
-      return;
-    }
-
-    // Query count_open_critical for each image in the repo concurrently
-    const queries = repoImages.map((img) =>
-      runQuery({
-        lens: "Image",
-        traversal: [],
-        time: { mode: "last_n_snapshots", n: 1, granularity: "day" },
-        measure: "count_open_critical",
-        filters: [{ field: "image_id", operator: "eq", value: img.id }],
-        group_by: [],
-        order_by: null,
-        limit: null,
-      })
-        .then((result) => {
-          const s = result.series[0];
-          const val = s ? (s.y[s.y.length - 1] as number | null) : null;
-          return { ...img, criticalCount: typeof val === "number" ? val : null };
-        })
-        .catch(() => ({ ...img, criticalCount: null })),
-    );
-
-    Promise.all(queries).then(setTags);
-  }, [repository, allImages, selectedId]);
-
-  const maxCritical = tags
-    ? Math.max(1, ...tags.map((t) => t.criticalCount ?? 0))
-    : 1;
-
-  if (!tags) {
+function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
+  if (rows === null) {
     return (
       <div className="flex flex-col gap-2">
         {[1, 2, 3].map((i) => (
           <div
             key={i}
-            className="h-[52px] animate-pulse rounded"
+            className="h-[68px] animate-pulse rounded"
             style={{ backgroundColor: "var(--bg-surface)" }}
           />
         ))}
@@ -544,54 +508,100 @@ function TagLineagePanel({ selectedId, allImages, repository }: TagLineagePanelP
     );
   }
 
-  if (tags.length <= 1) {
+  if (rows.length === 0) {
     return (
-      <p
-        className="text-[11px] italic"
-        style={{ color: "var(--fg-muted)" }}
-      >
-        This image is the only tag in its repository — no tag lineage to compare.
+      <p className="text-[11px] italic" style={{ color: "var(--fg-muted)" }}>
+        No tags found for this repository.
       </p>
     );
   }
 
+  const maxCritical = Math.max(1, ...rows.map((r) => r.critical ?? 0));
+  const maxHigh = Math.max(1, ...rows.map((r) => r.high ?? 0));
+
   return (
-    <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: "420px" }}>
-      {tags.map((t) => {
-        const isCurrent = t.id === selectedId;
-        const barPct =
-          t.criticalCount !== null
-            ? Math.max(4, Math.round((t.criticalCount / maxCritical) * 100))
+    <div
+      className="relative flex flex-col overflow-y-auto"
+      style={{ maxHeight: "460px", paddingLeft: "18px" }}
+    >
+      {/* Vertical connector line */}
+      <div
+        style={{
+          position: "absolute",
+          left: 6,
+          top: 16,
+          bottom: 16,
+          width: 2,
+          backgroundColor: "var(--border-subtle)",
+          borderRadius: 1,
+        }}
+      />
+
+      {rows.map((row, idx) => {
+        const critPct =
+          row.critical !== null && row.critical > 0
+            ? Math.max(6, Math.round((row.critical / maxCritical) * 100))
             : 0;
+        const highPct =
+          row.high !== null && row.high > 0
+            ? Math.max(6, Math.round((row.high / maxHigh) * 100))
+            : 0;
+        const bothZero = (row.critical ?? 0) === 0 && (row.high ?? 0) === 0;
 
         return (
           <div
-            key={t.id}
-            className="flex flex-col gap-1 rounded p-2"
+            key={row.imageId}
+            className="relative flex flex-col gap-1 rounded p-2 mb-2"
             style={{
-              backgroundColor: isCurrent
-                ? "var(--bg-surface)"
-                : "transparent",
-              border: isCurrent
+              backgroundColor: row.isCurrent ? "var(--bg-surface)" : "transparent",
+              border: row.isCurrent
                 ? `1px solid ${CHART_COLORS.severityCritical}`
                 : "1px solid transparent",
-              cursor: "default",
             }}
           >
+            {/* Dot on the connector line */}
+            <div
+              style={{
+                position: "absolute",
+                left: -15,
+                top: 14,
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                backgroundColor: row.isCurrent
+                  ? CHART_COLORS.severityCritical
+                  : "var(--border-strong)",
+                border: "2px solid var(--bg-base)",
+                zIndex: 1,
+              }}
+            />
+
+            {/* Row header: date + tag name + CURRENT pill */}
             <div className="flex items-center justify-between gap-1">
-              <span
-                className="text-[11px] font-medium truncate"
-                style={{ color: isCurrent ? "var(--fg-primary)" : "var(--fg-muted)" }}
-                title={t.tag}
-              >
-                {t.tag || t.label}
-              </span>
-              {isCurrent && (
+              <div className="flex flex-col min-w-0">
                 <span
-                  className="text-[9px] font-bold uppercase tracking-widest px-1 rounded"
+                  className="text-[9px]"
+                  style={{ color: "var(--fg-muted)" }}
+                >
+                  {row.firstSeen ? row.firstSeen.slice(0, 10) : "—"}
+                </span>
+                <span
+                  className="text-[11px] font-medium truncate"
+                  style={{
+                    color: row.isCurrent ? "var(--fg-primary)" : "var(--fg-muted)",
+                    maxWidth: "160px",
+                  }}
+                  title={row.tag}
+                >
+                  {row.tag || "(untagged)"}
+                </span>
+              </div>
+              {row.isCurrent && (
+                <span
+                  className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
                   style={{
                     backgroundColor: CHART_COLORS.severityCritical,
-                    color: CHART_COLORS.white,
+                    color: "#ffffff",
                     flexShrink: 0,
                   }}
                 >
@@ -599,28 +609,114 @@ function TagLineagePanel({ selectedId, allImages, repository }: TagLineagePanelP
                 </span>
               )}
             </div>
-            {/* Critical bar */}
-            <div
-              className="w-full rounded-sm overflow-hidden"
-              style={{ height: 4, backgroundColor: "var(--border-subtle)" }}
-            >
-              <div
-                style={{
-                  width: `${barPct}%`,
-                  height: "100%",
-                  backgroundColor: CHART_COLORS.severityCritical,
-                  borderRadius: 2,
-                }}
-              />
-            </div>
+
+            {/* Digest prefix */}
             <span
-              className="text-[9px]"
+              className="text-[9px] font-mono"
               style={{ color: "var(--fg-muted)" }}
             >
-              {t.criticalCount !== null
-                ? `${t.criticalCount.toLocaleString("en-GB")} critical`
-                : "—"}
+              {row.digestPrefix}
             </span>
+
+            {/* Severity bars or zero-state text */}
+            {bothZero ? (
+              <span
+                className="text-[9px] italic"
+                style={{ color: "var(--fg-muted)" }}
+              >
+                0 Critical, 0 High
+              </span>
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                {/* Critical bar */}
+                {row.critical !== null && (
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="text-[9px] w-[44px] shrink-0"
+                      style={{ color: "var(--fg-muted)" }}
+                    >
+                      Crit
+                    </span>
+                    {row.critical === 0 ? (
+                      <span className="text-[9px] italic" style={{ color: "var(--fg-muted)" }}>
+                        0
+                      </span>
+                    ) : (
+                      <div
+                        className="flex items-center gap-1 flex-1 min-w-0"
+                      >
+                        <div
+                          style={{
+                            width: `${critPct}%`,
+                            height: 6,
+                            backgroundColor: CHART_COLORS.severityCritical,
+                            borderRadius: 2,
+                            minWidth: 6,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span
+                          className="text-[9px] tabular-nums"
+                          style={{ color: CHART_COLORS.severityCritical, flexShrink: 0 }}
+                        >
+                          {row.critical.toLocaleString("en-GB")}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* High bar */}
+                {row.high !== null && (
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="text-[9px] w-[44px] shrink-0"
+                      style={{ color: "var(--fg-muted)" }}
+                    >
+                      High
+                    </span>
+                    {row.high === 0 ? (
+                      <span className="text-[9px] italic" style={{ color: "var(--fg-muted)" }}>
+                        0
+                      </span>
+                    ) : (
+                      <div className="flex items-center gap-1 flex-1 min-w-0">
+                        <div
+                          style={{
+                            width: `${highPct}%`,
+                            height: 6,
+                            backgroundColor: CHART_COLORS.severityHigh,
+                            borderRadius: 2,
+                            minWidth: 6,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span
+                          className="text-[9px] tabular-nums"
+                          style={{ color: CHART_COLORS.severityHigh, flexShrink: 0 }}
+                        >
+                          {row.high.toLocaleString("en-GB")}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Separator except after last row */}
+            {idx < rows.length - 1 && (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: -1,
+                  left: 8,
+                  right: 8,
+                  height: 1,
+                  backgroundColor: "var(--border-subtle)",
+                }}
+              />
+            )}
           </div>
         );
       })}
@@ -629,35 +725,32 @@ function TagLineagePanel({ selectedId, allImages, repository }: TagLineagePanelP
 }
 
 // ---------------------------------------------------------------------------
-// Image picker
+// Repository picker
 // ---------------------------------------------------------------------------
-interface ImagePickerProps {
-  images: ImageEntity[];
-  selectedId: string;
-  onSelect: (id: string) => void;
+interface RepositoryPickerProps {
+  repositories: RepositoryEntity[];
+  selectedRepo: string;
+  onSelect: (repo: string) => void;
 }
 
-function ImagePicker({ images, selectedId, onSelect }: ImagePickerProps) {
+function RepositoryPicker({ repositories, selectedRepo, onSelect }: RepositoryPickerProps) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const filtered = images
-    .filter((img) =>
-      img.label.toLowerCase().includes(query.toLowerCase()),
+  const filtered = repositories
+    .filter((r) =>
+      r.repository.toLowerCase().includes(query.toLowerCase()),
     )
     .slice(0, 10);
 
-  const selectedImage = images.find((img) => img.id === selectedId);
-
   const handleSelect = useCallback(
-    (id: string) => {
-      onSelect(id);
-      const img = images.find((i) => i.id === id);
-      setQuery(img?.label ?? "");
+    (repo: string) => {
+      onSelect(repo);
+      setQuery(repo);
       setOpen(false);
     },
-    [images, onSelect],
+    [onSelect],
   );
 
   // Close on outside click
@@ -677,8 +770,8 @@ function ImagePicker({ images, selectedId, onSelect }: ImagePickerProps) {
   return (
     <div ref={containerRef} className="relative w-full" style={{ maxWidth: 480 }}>
       <Input
-        value={open ? query : (selectedImage?.label ?? query)}
-        placeholder="Search images…"
+        value={open ? query : (selectedRepo || query)}
+        placeholder="Search repositories…"
         onChange={(e) => {
           setQuery(e.target.value);
           setOpen(true);
@@ -699,17 +792,23 @@ function ImagePicker({ images, selectedId, onSelect }: ImagePickerProps) {
             border: "1px solid var(--border-strong)",
           }}
         >
-          {filtered.map((img) => (
+          {filtered.map((r) => (
             <button
-              key={img.id}
+              key={r.repository}
               className="w-full text-left px-3 py-2 text-[12px] hover:bg-muted transition-colors"
               style={{ color: "var(--fg-primary)" }}
               onMouseDown={(e) => {
-                e.preventDefault(); // prevent onBlur
-                handleSelect(img.id);
+                e.preventDefault();
+                handleSelect(r.repository);
               }}
             >
-              <span className="font-medium">{img.label}</span>
+              <span className="font-medium">{r.repository}</span>
+              <span
+                className="ml-2 text-[10px]"
+                style={{ color: "var(--fg-muted)" }}
+              >
+                {r.imageCount} tag{r.imageCount !== 1 ? "s" : ""}
+              </span>
             </button>
           ))}
         </div>
@@ -721,55 +820,84 @@ function ImagePicker({ images, selectedId, onSelect }: ImagePickerProps) {
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
-export function ImageRemediationStory({ imageId: externalImageId }: ImageRemediationStoryProps) {
+export function ImageRemediationStory({ repository: externalRepo }: ImageRemediationStoryProps) {
   const [allImages, setAllImages] = useState<ImageEntity[] | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(externalImageId ?? null);
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(externalRepo ?? null);
   const [data, setData] = useState<RemediationData | null>(null);
   const [metrics, setMetrics] = useState<HeadlineMetrics | null>(null);
   const [reasonTotals, setReasonTotals] = useState<ReasonTotals | null>(null);
+  const [genealogyRows, setGenealogyRows] = useState<TagGenealogyRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [axisLabels, setAxisLabels] = useState(false);
 
-  // Load entity list (always needed — for picker and for tag lineage)
+  // Load entity list
   useEffect(() => {
     getEntities("Image")
       .then((raw) => {
         const imgs = raw as ImageEntity[];
-        const sorted = [...imgs].sort((a, b) => a.label.localeCompare(b.label));
-        setAllImages(sorted);
-        // Auto-select first image when no external imageId provided
-        if (!externalImageId && sorted.length > 0) {
-          setSelectedId(sorted[0].id);
+        setAllImages(imgs);
+        // Auto-select first repository alphabetically when no external repo provided
+        if (!externalRepo && imgs.length > 0) {
+          const repos = Array.from(new Set(imgs.map((i) => i.repository || i.id))).sort();
+          if (repos.length > 0) setSelectedRepo(repos[0]);
         }
       })
       .catch((e: unknown) => {
         setError(e instanceof Error ? e.message : "Failed to load images.");
       });
-  }, [externalImageId]);
+  }, [externalRepo]);
 
-  // Load chart data whenever selected image changes
+  // Build unique repository list from allImages
+  const repositories = useMemo<RepositoryEntity[]>(() => {
+    if (!allImages) return [];
+    const seen = new Set<string>();
+    const out: RepositoryEntity[] = [];
+    for (const img of allImages) {
+      const repo = img.repository || img.id;
+      if (!seen.has(repo)) {
+        seen.add(repo);
+        out.push({ repository: repo, imageCount: 1 });
+      } else {
+        const existing = out.find((r) => r.repository === repo);
+        if (existing) existing.imageCount++;
+      }
+    }
+    out.sort((a, b) => a.repository.localeCompare(b.repository));
+    return out;
+  }, [allImages]);
+
+  // Images belonging to the selected repository
+  const imagesInRepo = useMemo<ImageEntity[]>(() => {
+    if (!allImages || !selectedRepo) return [];
+    return allImages.filter((img) => (img.repository || img.id) === selectedRepo);
+  }, [allImages, selectedRepo]);
+
+  const imageIds = useMemo<string[]>(() => imagesInRepo.map((img) => img.id), [imagesInRepo]);
+
+  // Load chart data whenever selected repository changes
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedRepo || imageIds.length === 0) return;
 
     setData(null);
     setMetrics(null);
     setReasonTotals(null);
+    setGenealogyRows(null);
     setError(null);
 
     let cancelled = false;
 
     Promise.all([
-      runQuery(imageQuery("count_open_critical", selectedId)),
-      runQuery(imageQuery("count_open_high", selectedId)),
-      runQuery(imageQuery("count_open_medium", selectedId)),
-      runQuery(imageQuery("count_open_low", selectedId)),
-      runQuery(imageQuery("count_new", selectedId)),
-      runQuery(imageQuery("count_fixed", selectedId)),
-      runQuery(imageQuery("count_regressed", selectedId)),
-      runQuery(imageQuery("count_fixed_patched", selectedId)),
-      runQuery(imageQuery("count_fixed_retired", selectedId)),
-      runQuery(imageQuery("count_fixed_accepted", selectedId)),
-      runQuery(imageQuery("count_fixed_other", selectedId)),
+      runQuery(repoQuery("count_open_critical", imageIds)),
+      runQuery(repoQuery("count_open_high", imageIds)),
+      runQuery(repoQuery("count_open_medium", imageIds)),
+      runQuery(repoQuery("count_open_low", imageIds)),
+      runQuery(repoQuery("count_new", imageIds)),
+      runQuery(repoQuery("count_fixed", imageIds)),
+      runQuery(repoQuery("count_regressed", imageIds)),
+      runQuery(repoQuery("count_fixed_patched", imageIds)),
+      runQuery(repoQuery("count_fixed_retired", imageIds)),
+      runQuery(repoQuery("count_fixed_accepted", imageIds)),
+      runQuery(repoQuery("count_fixed_other", imageIds)),
     ])
       .then(
         ([
@@ -787,7 +915,6 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
           const fixSeries = extractSeries(fixResult);
           const regSeries = extractSeries(regResult);
 
-          // Align everything to a shared date axis
           const { dates, aligned } = alignToSharedDates([
             critSeries,
             highSeries,
@@ -801,7 +928,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
           const [critical, high, medium, low, newCounts, fixedCounts, regressedCounts] = aligned;
           const totals = dates.map((_, i) => critical[i] + high[i] + medium[i] + low[i]);
 
-          // Skip the first data point on new/fixed/regressed — first snapshot counts every finding as "new"
+          // Skip the first data point — first snapshot counts everything as "new"
           const sliceFrom = newCounts.findIndex((v) => v === 0) === 0 ? 1 : 0;
           const slicedDates = dates.slice(sliceFrom);
           const slicedCritical = critical.slice(sliceFrom);
@@ -825,13 +952,11 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
             regressedCounts: slicedRegressed,
           });
 
-          // Headline metrics
           const currentOpen = slicedTotals[slicedTotals.length - 1] ?? 0;
           const totalNew = slicedNew.reduce((a, b) => a + b, 0);
           const totalFixed = slicedFixed.reduce((a, b) => a + b, 0);
           const totalRegressed = slicedRegressed.reduce((a, b) => a + b, 0);
 
-          // Delta vs 7 days ago
           let deltaVs7Days: number | null = null;
           if (slicedTotals.length >= 8) {
             const sevenDaysAgo = slicedTotals[slicedTotals.length - 8];
@@ -840,7 +965,6 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
 
           setMetrics({ currentOpen, totalNew, totalFixed, totalRegressed, deltaVs7Days });
 
-          // Reason-code totals: sum the full y-arrays
           const sumSeries = (r: QueryResult) => {
             const s = r.series[0];
             if (!s) return 0;
@@ -863,14 +987,126 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedRepo, imageIds]);
+
+  // Load tag genealogy data using Option B (single batch query with group_by)
+  useEffect(() => {
+    if (!selectedRepo || imagesInRepo.length === 0) return;
+
+    let cancelled = false;
+    setGenealogyRows(null);
+
+    const ids = imagesInRepo.map((img) => img.id);
+
+    // Determine which image is "current" (latest first_seen / last_seen)
+    const sorted = [...imagesInRepo].sort((a, b) =>
+      (b.first_seen ?? b.last_seen ?? "").localeCompare(a.first_seen ?? a.last_seen ?? ""),
+    );
+    const currentImageId = sorted[0]?.id ?? null;
+
+    // Two batch queries: critical and high, both grouped by image_id
+    Promise.all([
+      runQuery({
+        lens: "Image",
+        traversal: [],
+        time: { mode: "last_n_snapshots", n: 1, granularity: "day" },
+        measure: "count_open_critical",
+        filters: [{ field: "image_id", operator: "in", value: ids }],
+        group_by: ["image_id"],
+        order_by: null,
+        limit: null,
+      }),
+      runQuery({
+        lens: "Image",
+        traversal: [],
+        time: { mode: "last_n_snapshots", n: 1, granularity: "day" },
+        measure: "count_open_high",
+        filters: [{ field: "image_id", operator: "in", value: ids }],
+        group_by: ["image_id"],
+        order_by: null,
+        limit: null,
+      }),
+    ])
+      .then(([critResult, highResult]) => {
+        if (cancelled) return;
+
+        // Build lookup maps from image_id -> latest value
+        const critMap = new Map<string, number>();
+        for (const s of critResult.series) {
+          const imgId = (s.key as Record<string, string>)?.image_id;
+          if (imgId) {
+            const arr = s.y as number[];
+            critMap.set(imgId, arr[arr.length - 1] ?? 0);
+          }
+        }
+
+        const highMap = new Map<string, number>();
+        for (const s of highResult.series) {
+          const imgId = (s.key as Record<string, string>)?.image_id;
+          if (imgId) {
+            const arr = s.y as number[];
+            highMap.set(imgId, arr[arr.length - 1] ?? 0);
+          }
+        }
+
+        // Build rows sorted oldest → newest (conventional genealogy order)
+        const rows: TagGenealogyRow[] = imagesInRepo
+          .slice()
+          .sort((a, b) =>
+            (a.first_seen ?? a.last_seen ?? "").localeCompare(b.first_seen ?? b.last_seen ?? ""),
+          )
+          .map((img) => ({
+            imageId: img.id,
+            tag: img.tag || img.label || "(untagged)",
+            digestPrefix: img.id.length > 19 ? img.id.slice(0, 19) : img.id,
+            firstSeen: img.first_seen ?? img.last_seen ?? "",
+            critical: critMap.get(img.id) ?? null,
+            high: highMap.get(img.id) ?? null,
+            isCurrent: img.id === currentImageId,
+          }));
+
+        setGenealogyRows(rows);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          // Fall back to showing rows without counts rather than breaking the whole widget
+          const rows: TagGenealogyRow[] = imagesInRepo
+            .slice()
+            .sort((a, b) =>
+              (a.first_seen ?? a.last_seen ?? "").localeCompare(b.first_seen ?? b.last_seen ?? ""),
+            )
+            .map((img) => ({
+              imageId: img.id,
+              tag: img.tag || img.label || "(untagged)",
+              digestPrefix: img.id.length > 19 ? img.id.slice(0, 19) : img.id,
+              firstSeen: img.first_seen ?? img.last_seen ?? "",
+              critical: null,
+              high: null,
+              isCurrent: img.id === currentImageId,
+            }));
+          setGenealogyRows(rows);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRepo, imagesInRepo]);
 
   // Derived values
-  const selectedImage = allImages?.find((img) => img.id === selectedId) ?? null;
-  const widgetTitle = selectedImage
-    ? `Image Remediation Story — ${selectedImage.label}`
+  const tagCount = imagesInRepo.length;
+  const latestTag = genealogyRows
+    ? (genealogyRows[genealogyRows.length - 1]?.tag ?? null)
+    : null;
+
+  const widgetTitle = selectedRepo
+    ? `Image Remediation — ${selectedRepo}`
     : "Image Remediation Story";
-  const narrative = metrics ? buildNarrative(metrics, reasonTotals ?? undefined) : undefined;
+
+  const narrative =
+    metrics && selectedRepo
+      ? buildNarrative(selectedRepo, metrics, tagCount, latestTag, reasonTotals ?? undefined)
+      : undefined;
 
   // ---------------------------------------------------------------------------
   // Render
@@ -884,8 +1120,8 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
       onAxisLabelsChange={setAxisLabels}
     >
       <div className="flex flex-col gap-3">
-        {/* ── Image picker (only when no external imageId) ── */}
-        {!externalImageId && (
+        {/* Repository picker (only when no external repo prop) */}
+        {!externalRepo && (
           <div style={{ height: 36 }}>
             {allImages === null ? (
               <div
@@ -893,16 +1129,16 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
                 style={{ backgroundColor: "var(--bg-surface)" }}
               />
             ) : (
-              <ImagePicker
-                images={allImages}
-                selectedId={selectedId ?? ""}
-                onSelect={setSelectedId}
+              <RepositoryPicker
+                repositories={repositories}
+                selectedRepo={selectedRepo ?? ""}
+                onSelect={setSelectedRepo}
               />
             )}
           </div>
         )}
 
-        {/* ── Error state ── */}
+        {/* Error state */}
         {error && (
           <div
             className="flex items-center justify-center py-6 text-sm"
@@ -915,7 +1151,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
 
         {!error && (
           <>
-            {/* ── Headline metrics strip ── */}
+            {/* Headline metrics strip */}
             <div className="flex gap-2">
               <StatCard
                 label="Current Open"
@@ -947,11 +1183,11 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
               />
             </div>
 
-            {/* ── Main visualisation grid ── */}
+            {/* Main visualisation grid */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 200px",
+                gridTemplateColumns: "1fr 280px",
                 gap: "0 16px",
               }}
             >
@@ -981,7 +1217,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
                         data.dates,
                         data.newCounts,
                         data.fixedCounts,
-                        false, // no axis labels on flow chart — shares same x
+                        false,
                       )}
                       style={{ height: "100px", width: "100%" }}
                       notMerge
@@ -991,10 +1227,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
                 </div>
 
                 {/* Reason-code decomposition bar */}
-                <div
-                  className="flex items-center"
-                  style={{ height: 72 }}
-                >
+                <div className="flex items-center" style={{ height: 72 }}>
                   {data === null || reasonTotals === null ? (
                     <ChartSkeleton height={72} />
                   ) : (
@@ -1010,11 +1243,8 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
                 </div>
               </div>
 
-              {/* RIGHT: tag lineage panel — spans full height */}
-              <div
-                className="flex flex-col"
-                style={{ paddingTop: 0 }}
-              >
+              {/* RIGHT: tag genealogy panel — spans full height */}
+              <div className="flex flex-col" style={{ paddingTop: 0 }}>
                 <span
                   className="text-[10px] font-medium tracking-widest uppercase mb-2"
                   style={{ color: "var(--fg-muted)" }}
@@ -1022,23 +1252,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
                   Tag Lineage
                 </span>
 
-                {allImages === null || selectedId === null ? (
-                  <div className="flex flex-col gap-2">
-                    {[1, 2, 3].map((i) => (
-                      <div
-                        key={i}
-                        className="h-[52px] animate-pulse rounded"
-                        style={{ backgroundColor: "var(--bg-surface)" }}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <TagLineagePanel
-                    selectedId={selectedId}
-                    allImages={allImages}
-                    repository={selectedImage?.repository ?? ""}
-                  />
-                )}
+                <TagGenealogyPanel rows={genealogyRows} />
               </div>
             </div>
           </>
