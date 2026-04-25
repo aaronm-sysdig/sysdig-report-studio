@@ -606,20 +606,23 @@ function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
               }}
             />
 
-            {/* Row header: date + tag name + CURRENT pill */}
+            {/* Row header: date + tag pill + CURRENT pill */}
             <div className="flex items-center justify-between gap-1">
-              <div className="flex flex-col min-w-0">
-                <span
-                  className="text-[9px]"
-                  style={{ color: "var(--fg-muted)" }}
-                >
+              <div className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-[9px]" style={{ color: "var(--fg-muted)" }}>
                   {row.firstSeen ? row.firstSeen.slice(0, 10) : "—"}
                 </span>
+                {/* Tag pill — coloured rounded rectangle */}
                 <span
-                  className="text-[11px] font-medium truncate"
+                  className="text-[10px] font-semibold px-2 py-0.5 rounded-full truncate"
                   style={{
-                    color: row.isCurrent ? "var(--fg-primary)" : "var(--fg-muted)",
-                    maxWidth: "160px",
+                    backgroundColor: row.isCurrent
+                      ? CHART_COLORS.deepSee
+                      : "var(--bg-surface)",
+                    color: row.isCurrent ? "#ffffff" : "var(--fg-primary)",
+                    border: `1px solid ${row.isCurrent ? CHART_COLORS.deepSee : "var(--border-subtle)"}`,
+                    display: "inline-block",
+                    maxWidth: "140px",
                   }}
                   title={row.tag}
                 >
@@ -630,8 +633,9 @@ function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
                 <span
                   className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
                   style={{
-                    backgroundColor: CHART_COLORS.severityCritical,
-                    color: "#ffffff",
+                    backgroundColor: `${CHART_COLORS.lumin}33`,
+                    color: CHART_COLORS.deepSee,
+                    border: `1px solid ${CHART_COLORS.lumin}`,
                     flexShrink: 0,
                   }}
                 >
@@ -641,19 +645,13 @@ function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
             </div>
 
             {/* Digest prefix */}
-            <span
-              className="text-[9px] font-mono"
-              style={{ color: "var(--fg-muted)" }}
-            >
+            <span className="text-[9px] font-mono" style={{ color: "var(--fg-muted)" }}>
               {row.digestPrefix}
             </span>
 
-            {/* Severity bars or zero-state text */}
+            {/* Severity bars — fixed 100px track so bars never overflow */}
             {bothZero ? (
-              <span
-                className="text-[9px] italic"
-                style={{ color: "var(--fg-muted)" }}
-              >
+              <span className="text-[9px] italic" style={{ color: "var(--fg-muted)" }}>
                 0 Critical, 0 High
               </span>
             ) : (
@@ -661,75 +659,31 @@ function TagGenealogyPanel({ rows }: TagGenealogyPanelProps) {
                 {/* Critical bar */}
                 {row.critical !== null && (
                   <div className="flex items-center gap-1.5">
-                    <span
-                      className="text-[9px] w-[44px] shrink-0"
-                      style={{ color: "var(--fg-muted)" }}
-                    >
+                    <span className="text-[9px] shrink-0" style={{ color: "var(--fg-muted)", width: 28 }}>
                       Crit
                     </span>
-                    {row.critical === 0 ? (
-                      <span className="text-[9px] italic" style={{ color: "var(--fg-muted)" }}>
-                        0
-                      </span>
-                    ) : (
-                      <div
-                        className="flex items-center gap-1 flex-1 min-w-0"
-                        style={{ overflow: "hidden" }}
-                      >
-                        <div
-                          style={{
-                            width: `${critPct}%`,
-                            height: 6,
-                            backgroundColor: CHART_COLORS.severityCritical,
-                            borderRadius: 2,
-                            minWidth: 6,
-                            flexShrink: 0,
-                          }}
-                        />
-                        <span
-                          className="text-[9px] tabular-nums"
-                          style={{ color: CHART_COLORS.severityCritical, flexShrink: 0 }}
-                        >
-                          {row.critical.toLocaleString("en-GB")}
-                        </span>
-                      </div>
-                    )}
+                    {/* Fixed-width track — bar fills proportionally within 100px */}
+                    <div style={{ width: 100, height: 6, backgroundColor: "var(--bg-surface)", borderRadius: 3, flexShrink: 0, overflow: "hidden" }}>
+                      <div style={{ width: `${critPct}px`, height: "100%", backgroundColor: CHART_COLORS.severityCritical, borderRadius: 3 }} />
+                    </div>
+                    <span className="text-[9px] tabular-nums shrink-0" style={{ color: CHART_COLORS.severityCritical }}>
+                      {(row.critical ?? 0).toLocaleString("en-GB")}
+                    </span>
                   </div>
                 )}
 
                 {/* High bar */}
                 {row.high !== null && (
                   <div className="flex items-center gap-1.5">
-                    <span
-                      className="text-[9px] w-[44px] shrink-0"
-                      style={{ color: "var(--fg-muted)" }}
-                    >
+                    <span className="text-[9px] shrink-0" style={{ color: "var(--fg-muted)", width: 28 }}>
                       High
                     </span>
-                    {row.high === 0 ? (
-                      <span className="text-[9px] italic" style={{ color: "var(--fg-muted)" }}>
-                        0
-                      </span>
-                    ) : (
-                      <div className="flex items-center gap-1 flex-1 min-w-0">
-                        <div
-                          style={{
-                            width: `${highPct}%`,
-                            height: 6,
-                            backgroundColor: CHART_COLORS.severityHigh,
-                            borderRadius: 2,
-                            minWidth: 6,
-                            flexShrink: 0,
-                          }}
-                        />
-                        <span
-                          className="text-[9px] tabular-nums"
-                          style={{ color: CHART_COLORS.severityHigh, flexShrink: 0 }}
-                        >
-                          {row.high.toLocaleString("en-GB")}
-                        </span>
-                      </div>
-                    )}
+                    <div style={{ width: 100, height: 6, backgroundColor: "var(--bg-surface)", borderRadius: 3, flexShrink: 0, overflow: "hidden" }}>
+                      <div style={{ width: `${highPct}px`, height: "100%", backgroundColor: CHART_COLORS.severityHigh, borderRadius: 3 }} />
+                    </div>
+                    <span className="text-[9px] tabular-nums shrink-0" style={{ color: CHART_COLORS.severityHigh }}>
+                      {(row.high ?? 0).toLocaleString("en-GB")}
+                    </span>
                   </div>
                 )}
               </div>
