@@ -102,12 +102,36 @@ function repoQuery(measure: string, imageIds: string[]): QueryIn {
   };
 }
 
-/** Extract a single series (aggregated) into {dates, values} */
+/** Sum across ALL series from a QueryResult into {dates, values}.
+ *
+ * When a query filters by image_id IN [...], the rollup path returns one
+ * series per image_id — NOT a pre-aggregated single series. We must sum
+ * across all series at each date to get the repository-wide total.
+ */
 function extractSeries(result: QueryResult): { dates: string[]; values: number[] } {
   if (!result.series.length) return { dates: [], values: [] };
-  // With no group_by, the backend returns one aggregated series
-  const s = result.series[0];
-  return { dates: s.x as string[], values: s.y as number[] };
+
+  // Collect all dates across every series
+  const dateSet = new Set<string>();
+  for (const s of result.series) {
+    for (const d of s.x as string[]) dateSet.add(d);
+  }
+  const dates = Array.from(dateSet).sort();
+
+  // Sum values across all series at each date
+  const values = dates.map((d) => {
+    let total = 0;
+    for (const s of result.series) {
+      const idx = (s.x as string[]).indexOf(d);
+      if (idx >= 0) {
+        const v = (s.y as number[])[idx];
+        if (typeof v === "number") total += v;
+      }
+    }
+    return total;
+  });
+
+  return { dates, values };
 }
 
 /** Align multiple value arrays to a shared dates array */
@@ -214,7 +238,7 @@ function buildMainChartOption(
             label: {
               formatter: r.tag || r.digestPrefix.slice(0, 8),
               position: "insideStartTop" as const,
-              fontSize: 9,
+              fontSize: 12,
               fontWeight: isCurrent ? "bold" : "normal",
               color: isCurrent ? "#ffffff" : CHART_COLORS.greyMuted,
               backgroundColor: isCurrent ? CHART_COLORS.deepSee : "var(--bg-surface)",
@@ -356,7 +380,7 @@ function buildFlowChartOption(
         type: "bar",
         name: "New",
         data: newCounts,
-        itemStyle: { color: CHART_COLORS.severityCritical },
+        itemStyle: { color: CHART_COLORS.darkRed },
         barMaxWidth: 16,
       },
       {
