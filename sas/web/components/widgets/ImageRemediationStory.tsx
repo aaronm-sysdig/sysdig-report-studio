@@ -203,25 +203,37 @@ function buildMainChartOption(
 ): object {
   const { dates, critical, high, medium, low, totals } = data;
 
-  // Tag markers — vertical lines at each tag's first appearance date
+  // Tag markers — vertical dashed lines with rounded-pill labels
   const tagMarkLines = tagRows && tagRows.length > 0
     ? tagRows
         .filter((r) => r.firstSeen)
-        .map((r) => ({
-          xAxis: r.firstSeen.slice(0, 10),
-          label: {
-            formatter: r.tag || r.digestPrefix.slice(0, 8),
-            position: "insideStartTop" as const,
-            fontSize: 9,
-            color: CHART_COLORS.greyMuted,
-            rotate: 45,
-          },
-          lineStyle: {
-            color: CHART_COLORS.greyBorder,
-            type: "dashed" as const,
-            width: 1,
-          },
-        }))
+        .map((r) => {
+          const isCurrent = r.isCurrent;
+          return {
+            xAxis: r.firstSeen.slice(0, 10),
+            label: {
+              formatter: r.tag || r.digestPrefix.slice(0, 8),
+              position: "insideStartTop" as const,
+              fontSize: 9,
+              fontWeight: isCurrent ? "bold" : "normal",
+              color: isCurrent ? "#ffffff" : CHART_COLORS.greyMuted,
+              backgroundColor: isCurrent ? CHART_COLORS.deepSee : "var(--bg-surface)",
+              borderColor: isCurrent ? CHART_COLORS.deepSee : CHART_COLORS.greyBorder,
+              borderWidth: 1,
+              borderRadius: 10,
+              padding: [2, 6, 2, 6],
+              // slight shadow so pill lifts off chart bg
+              shadowBlur: isCurrent ? 4 : 0,
+              shadowColor: "rgba(0,0,0,0.15)",
+            },
+            lineStyle: {
+              color: isCurrent ? CHART_COLORS.deepSee : CHART_COLORS.greyBorder,
+              type: (isCurrent ? "solid" : "dashed") as "solid" | "dashed",
+              width: isCurrent ? 1.5 : 1,
+              opacity: isCurrent ? 0.6 : 0.4,
+            },
+          };
+        })
     : [];
 
   return {
