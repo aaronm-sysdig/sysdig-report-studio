@@ -28,14 +28,19 @@ _OPERATOR_MAP = {"eq": "=", "neq": "!=", "gte": ">=", "lte": "<=", "in": "IN"}
 # Map measure name → rollup column expression.
 # count_fixed is stored split across 4 reason-code columns; sum them.
 _ROLLUP_MEASURE_EXPR = {
-    "count_open":          "count_open",
-    "count_open_critical": "count_open_critical",
-    "count_open_high":     "count_open_high",
-    "count_open_medium":   "count_open_medium",
-    "count_open_low":      "count_open_low",
-    "count_new":           "count_new",
-    "count_fixed":         "(count_fixed_patched + count_fixed_retired + count_fixed_accepted + count_fixed_other)",
-    "count_regressed":     "count_regressed",
+    "count_open":            "count_open",
+    "count_open_critical":   "count_open_critical",
+    "count_open_high":       "count_open_high",
+    "count_open_medium":     "count_open_medium",
+    "count_open_low":        "count_open_low",
+    "count_open_negligible": "count_open_negligible",
+    "count_new":             "count_new",
+    "count_fixed":           "(count_fixed_patched + count_fixed_retired + count_fixed_accepted + count_fixed_other)",
+    "count_fixed_patched":   "count_fixed_patched",
+    "count_fixed_retired":   "count_fixed_retired",
+    "count_fixed_accepted":  "count_fixed_accepted",
+    "count_fixed_other":     "count_fixed_other",
+    "count_regressed":       "count_regressed",
 }
 
 # Primary key / entity identifier column per rollup table.
@@ -55,10 +60,15 @@ _DIRECT_DATE_COL = {
     "count_regressed":     ("finding_state.reopened_at", "finding_state.reopened_at IS NOT NULL"),
     "count_distinct_cve":  ("finding_state.last_seen",   "finding_state.state = 'OPEN'"),
     "mttr":                ("finding_state.closed_at",   "finding_state.state = 'CLOSED'"),
-    "count_open_critical": ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'Critical'"),
-    "count_open_high":     ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'High'"),
-    "count_open_medium":   ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'Medium'"),
-    "count_open_low":      ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'Low'"),
+    "count_open_critical":   ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'Critical'"),
+    "count_open_high":       ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'High'"),
+    "count_open_medium":     ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'Medium'"),
+    "count_open_low":        ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'Low'"),
+    "count_open_negligible": ("finding_state.last_seen",   "finding_state.state = 'OPEN' AND finding_state.severity = 'Negligible'"),
+    "count_fixed_patched":   ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code = 'PATCHED'"),
+    "count_fixed_retired":   ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code = 'RETIRED'"),
+    "count_fixed_accepted":  ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code = 'ACCEPTED'"),
+    "count_fixed_other":     ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code IN ('FEED_WITHDRAWN', 'UNKNOWN')"),
 }
 
 _DIRECT_AGGREGATE = {
@@ -68,10 +78,15 @@ _DIRECT_AGGREGATE = {
     "count_regressed":     "COUNT(*)",
     "count_distinct_cve":  "COUNT(DISTINCT finding_state.cve_id)",
     "mttr":                "AVG(finding_state.days_open)",
-    "count_open_critical": "COUNT(*)",
-    "count_open_high":     "COUNT(*)",
-    "count_open_medium":   "COUNT(*)",
-    "count_open_low":      "COUNT(*)",
+    "count_open_critical":   "COUNT(*)",
+    "count_open_high":       "COUNT(*)",
+    "count_open_medium":     "COUNT(*)",
+    "count_open_low":        "COUNT(*)",
+    "count_open_negligible": "COUNT(*)",
+    "count_fixed_patched":   "COUNT(*)",
+    "count_fixed_retired":   "COUNT(*)",
+    "count_fixed_accepted":  "COUNT(*)",
+    "count_fixed_other":     "COUNT(*)",
 }
 
 # Direct-path join SQL per lens. Empty string = no join needed.

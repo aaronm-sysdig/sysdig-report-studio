@@ -15,6 +15,12 @@ _ROLLUP_MEASURES = {
     "count_open_high",
     "count_open_medium",
     "count_open_low",
+    # count_open_negligible intentionally excluded: column not yet in rollup tables
+    # (schema migration pending) — falls through to direct path
+    "count_fixed_patched",
+    "count_fixed_retired",
+    "count_fixed_accepted",
+    "count_fixed_other",
 }
 
 _LENS_TO_ROLLUP = {

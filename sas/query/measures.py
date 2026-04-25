@@ -95,9 +95,51 @@ class CountOpenLow:
         return "count_open_low"
 
 
+class CountOpenNegligible:
+    name = "count_open_negligible"
+    required_columns = ["count_open_negligible"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_open_negligible"
+
+
+class CountFixedPatched:
+    name = "count_fixed_patched"
+    required_columns = ["count_fixed_patched"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_fixed_patched"
+
+
+class CountFixedRetired:
+    name = "count_fixed_retired"
+    required_columns = ["count_fixed_retired"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_fixed_retired"
+
+
+class CountFixedAccepted:
+    name = "count_fixed_accepted"
+    required_columns = ["count_fixed_accepted"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_fixed_accepted"
+
+
+class CountFixedOther:
+    name = "count_fixed_other"
+    required_columns = ["count_fixed_other"]
+
+    def build_select_sql(self, target_date) -> str:
+        return "count_fixed_other"
+
+
 # Registration — must run at import time
 for _cls in [
     CountOpen, CountNew, CountFixed, CountRegressed, CountDistinctCve, Mttr,
     CountOpenCritical, CountOpenHigh, CountOpenMedium, CountOpenLow,
+    CountOpenNegligible,
+    CountFixedPatched, CountFixedRetired, CountFixedAccepted, CountFixedOther,
 ]:
     register_measure(_cls.name, _cls)

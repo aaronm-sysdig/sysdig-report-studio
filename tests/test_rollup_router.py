@@ -116,3 +116,16 @@ def test_count_open_high_routes_to_workload_rollup():
         filters=[],
     )
     assert can_use_rollup(q) == "daily_metrics_by_workload"
+
+
+def test_count_fixed_patched_routes_to_image_rollup():
+    from sas.query.primitives import Query, TimeWindow
+    from sas.query.rollup_router import can_use_rollup
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_fixed_patched",
+        filters=[],
+    )
+    assert can_use_rollup(q) == "daily_metrics_by_image"

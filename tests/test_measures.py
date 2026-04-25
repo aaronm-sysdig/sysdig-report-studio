@@ -14,6 +14,9 @@ def test_all_v1_measures_registered():
     expected = {
         "count_open", "count_new", "count_fixed", "count_regressed", "count_distinct_cve", "mttr",
         "count_open_critical", "count_open_high", "count_open_medium", "count_open_low",
+        # Phase 2.3 — negligible tier + reason-code decomposition
+        "count_open_negligible",
+        "count_fixed_patched", "count_fixed_retired", "count_fixed_accepted", "count_fixed_other",
     }
     assert expected == set(MEASURES.keys())
 
@@ -90,3 +93,28 @@ def test_count_open_critical_builds_correct_sql():
     m = MEASURES["count_open_critical"]()
     sql = m.build_select_sql(date(2026, 4, 23))
     assert "count_open_critical" in sql.lower()
+
+
+def test_count_open_negligible_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_open_negligible" in MEASURES
+
+
+def test_count_fixed_patched_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_fixed_patched" in MEASURES
+
+
+def test_count_fixed_retired_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_fixed_retired" in MEASURES
+
+
+def test_count_fixed_accepted_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_fixed_accepted" in MEASURES
+
+
+def test_count_fixed_other_measure_registered():
+    from sas.query.registry import MEASURES
+    assert "count_fixed_other" in MEASURES
