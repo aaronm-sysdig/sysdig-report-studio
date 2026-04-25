@@ -336,53 +336,78 @@ function buildFlowChartOption(
 }
 
 // ---------------------------------------------------------------------------
-// Reason-code decomposition bar (fallback: single total since per-reason measures
-// are not registered in Phase 2.1)
-// TODO: per-reason measures pending (count_fixed_patched, count_fixed_accepted,
-//       count_fixed_retired, count_fixed_other); using total fixed for now.
+// Reason-code decomposition bar — segmented by patched / retired / accepted / other
 // ---------------------------------------------------------------------------
 interface ReasonBarProps {
-  totalFixed: number;
+  patched: number;
+  retired: number;
+  accepted: number;
+  other: number;
 }
 
-function ReasonCodeBar({ totalFixed }: ReasonBarProps) {
-  if (totalFixed === 0) {
+function ReasonCodeBar({ patched, retired, accepted, other }: ReasonBarProps) {
+  const total = patched + retired + accepted + other;
+
+  if (total === 0) {
     return (
-      <div
-        className="text-[11px] italic"
-        style={{ color: "var(--fg-muted)" }}
-      >
+      <div className="text-xs italic" style={{ color: "var(--fg-muted)" }}>
         No findings closed in this window for this image.
       </div>
     );
   }
 
-  // Fallback: show as a single "CLOSED" segment until per-reason measures land
+  const segments = [
+    { label: "PATCHED",  count: patched,  color: CHART_COLORS.fixedGreen },
+    { label: "RETIRED",  count: retired,  color: CHART_COLORS.greyMuted },
+    { label: "ACCEPTED", count: accepted, color: CHART_COLORS.severityMedium },
+    { label: "OTHER",    count: other,    color: CHART_COLORS.greyBorder },
+  ].filter((s) => s.count > 0);
+
   return (
-    <div className="flex flex-col gap-1">
-      <span
-        className="text-[10px] font-medium tracking-widest uppercase"
+    <div>
+      {/* Header label */}
+      <div
+        className="text-[10px] font-medium tracking-widest uppercase mb-1.5"
         style={{ color: "var(--fg-muted)" }}
       >
-        Why Closed?
-      </span>
-      <div className="flex items-center gap-2">
-        <div
-          className="h-[24px] flex items-center justify-center rounded text-[10px] font-semibold"
-          style={{
-            flex: 1,
-            backgroundColor: CHART_COLORS.fixedGreen,
-            color: CHART_COLORS.deepSee,
-          }}
-        >
-          {totalFixed.toLocaleString("en-GB")} closed
-        </div>
-        <span
-          className="text-[10px] italic"
-          style={{ color: "var(--fg-muted)" }}
-        >
-          (breakdown pending per-reason measures)
-        </span>
+        Why {total.toLocaleString("en-GB")} closed?
+      </div>
+
+      {/* Segmented bar */}
+      <div
+        className="flex w-full h-7 overflow-hidden"
+        style={{ borderRadius: "var(--radius)" }}
+      >
+        {segments.map((s) => (
+          <div
+            key={s.label}
+            style={{
+              width: `${(s.count / total) * 100}%`,
+              backgroundColor: s.color,
+              minWidth: 24,
+            }}
+            className="flex items-center justify-center text-[10px] font-semibold text-white"
+            title={`${s.label}: ${s.count}`}
+          >
+            {((s.count / total) * 100) >= 8 && `${s.count}`}
+          </div>
+        ))}
+      </div>
+
+      {/* Legend */}
+      <div
+        className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[10px]"
+        style={{ color: "var(--fg-muted)" }}
+      >
+        {segments.map((s) => (
+          <div key={s.label} className="flex items-center gap-1">
+            <span
+              className="inline-block w-2 h-2 rounded-sm"
+              style={{ backgroundColor: s.color }}
+            />
+            <span>{s.label} {s.count}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -391,7 +416,14 @@ function ReasonCodeBar({ totalFixed }: ReasonBarProps) {
 // ---------------------------------------------------------------------------
 // Auto-narrative
 // ---------------------------------------------------------------------------
-function buildNarrative(metrics: HeadlineMetrics): string {
+interface ReasonTotals {
+  patched: number;
+  retired: number;
+  accepted: number;
+  other: number;
+}
+
+function buildNarrative(metrics: HeadlineMetrics, reason?: ReasonTotals): string {
   const { totalNew, totalFixed, totalRegressed } = metrics;
   const netImprovement = totalFixed - totalNew;
 
@@ -400,7 +432,30 @@ function buildNarrative(metrics: HeadlineMetrics): string {
   }
 
   if (totalRegressed > totalFixed && totalFixed < 2) {
-    return `In the last 90 days, ${totalRegressed.toLocaleString("en-GB")} finding${totalRegressed !== 1 ? "s" : ""} regressed for this image while only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed. Worth a look.`;
+    return `In the last 90 days, ${totalRegressed.toLocaleString("en-GB")} finding${totalRegressed !== 1 ? "s" : ""} regressed for this image whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed. Worth a look.`;
+  }
+
+  // Per-reason narrative when breakdown data is available
+  if (reason && totalFixed > 0) {
+    const { patched, retired, accepted } = reason;
+    const totalClosed = patched + retired + accepted + reason.other;
+
+    if (totalClosed > 0) {
+      // Patched dominates — real engineering work
+      if (patched > retired + accepted + reason.other) {
+        return `In the last 90 days, this image has been getting better — ${patched.toLocaleString("en-GB")} findings patched (real fixes)${retired > 0 ? `, ${retired.toLocaleString("en-GB")} retired` : ""}.`;
+      }
+
+      // Retired dominates — image churn rather than genuine fixing
+      if (retired > patched) {
+        return `In the last 90 days, ${retired.toLocaleString("en-GB")} findings disappeared because the image was retired, vs only ${patched.toLocaleString("en-GB")} actually patched. Worth investigating.`;
+      }
+
+      // Accepted is meaningful (>10% of closed)
+      if (accepted > 0 && accepted / totalClosed > 0.1) {
+        return `In the last 90 days, ${accepted.toLocaleString("en-GB")} findings were risk-accepted whilst only ${patched.toLocaleString("en-GB")} were patched.`;
+      }
+    }
   }
 
   if (netImprovement > 0 && totalFixed > 2) {
@@ -408,7 +463,7 @@ function buildNarrative(metrics: HeadlineMetrics): string {
   }
 
   if (totalNew > totalFixed && totalNew > 5) {
-    return `In the last 90 days, ${totalNew.toLocaleString("en-GB")} new findings appeared on this image while only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed — the backlog is growing.`;
+    return `In the last 90 days, ${totalNew.toLocaleString("en-GB")} new findings appeared on this image whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed — the backlog is growing.`;
   }
 
   return `In the last 90 days, ${totalNew.toLocaleString("en-GB")} new, ${totalFixed.toLocaleString("en-GB")} fixed, and ${totalRegressed.toLocaleString("en-GB")} regressed for this image.`;
@@ -671,6 +726,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
   const [selectedId, setSelectedId] = useState<string | null>(externalImageId ?? null);
   const [data, setData] = useState<RemediationData | null>(null);
   const [metrics, setMetrics] = useState<HeadlineMetrics | null>(null);
+  const [reasonTotals, setReasonTotals] = useState<ReasonTotals | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [axisLabels, setAxisLabels] = useState(false);
 
@@ -697,6 +753,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
 
     setData(null);
     setMetrics(null);
+    setReasonTotals(null);
     setError(null);
 
     let cancelled = false;
@@ -709,9 +766,17 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
       runQuery(imageQuery("count_new", selectedId)),
       runQuery(imageQuery("count_fixed", selectedId)),
       runQuery(imageQuery("count_regressed", selectedId)),
+      runQuery(imageQuery("count_fixed_patched", selectedId)),
+      runQuery(imageQuery("count_fixed_retired", selectedId)),
+      runQuery(imageQuery("count_fixed_accepted", selectedId)),
+      runQuery(imageQuery("count_fixed_other", selectedId)),
     ])
       .then(
-        ([critResult, highResult, medResult, lowResult, newResult, fixResult, regResult]) => {
+        ([
+          critResult, highResult, medResult, lowResult,
+          newResult, fixResult, regResult,
+          patchedResult, retiredResult, acceptedResult, otherResult,
+        ]) => {
           if (cancelled) return;
 
           const critSeries = extractSeries(critResult);
@@ -774,6 +839,19 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
           }
 
           setMetrics({ currentOpen, totalNew, totalFixed, totalRegressed, deltaVs7Days });
+
+          // Reason-code totals: sum the full y-arrays
+          const sumSeries = (r: QueryResult) => {
+            const s = r.series[0];
+            if (!s) return 0;
+            return (s.y as number[]).reduce((a, b) => a + (b ?? 0), 0);
+          };
+          setReasonTotals({
+            patched:  sumSeries(patchedResult),
+            retired:  sumSeries(retiredResult),
+            accepted: sumSeries(acceptedResult),
+            other:    sumSeries(otherResult),
+          });
         },
       )
       .catch((e: unknown) => {
@@ -792,7 +870,7 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
   const widgetTitle = selectedImage
     ? `Image Remediation Story — ${selectedImage.label}`
     : "Image Remediation Story";
-  const narrative = metrics ? buildNarrative(metrics) : undefined;
+  const narrative = metrics ? buildNarrative(metrics, reasonTotals ?? undefined) : undefined;
 
   // ---------------------------------------------------------------------------
   // Render
@@ -915,14 +993,17 @@ export function ImageRemediationStory({ imageId: externalImageId }: ImageRemedia
                 {/* Reason-code decomposition bar */}
                 <div
                   className="flex items-center"
-                  style={{ height: 48 }}
+                  style={{ height: 72 }}
                 >
-                  {data === null ? (
-                    <ChartSkeleton height={48} />
+                  {data === null || reasonTotals === null ? (
+                    <ChartSkeleton height={72} />
                   ) : (
                     <div className="w-full">
                       <ReasonCodeBar
-                        totalFixed={metrics?.totalFixed ?? 0}
+                        patched={reasonTotals.patched}
+                        retired={reasonTotals.retired}
+                        accepted={reasonTotals.accepted}
+                        other={reasonTotals.other}
                       />
                     </div>
                   )}
