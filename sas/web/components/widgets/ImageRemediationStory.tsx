@@ -1025,12 +1025,16 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
     );
     const currentImageId = sorted[0]?.id ?? null;
 
-    // Two batch queries: critical and high, both grouped by image_id
+    // Two batch queries: critical and high, both grouped by image_id.
+    // Use n=90 (full window) and take the PEAK value per image — not the latest.
+    // Retired images have 0 open findings at the latest snapshot, so n=1 would
+    // always show 0 for them. Peak gives the "worst point while this tag was active"
+    // which is what the tag lineage chart is meant to communicate.
     Promise.all([
       runQuery({
         lens: "Image",
         traversal: [],
-        time: { mode: "last_n_snapshots", n: 1, granularity: "day" },
+        time: { mode: "last_n_snapshots", n: 90, granularity: "day" },
         measure: "count_open_critical",
         filters: [{ field: "image_id", operator: "in", value: ids }],
         group_by: ["image_id"],
@@ -1040,7 +1044,7 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
       runQuery({
         lens: "Image",
         traversal: [],
-        time: { mode: "last_n_snapshots", n: 1, granularity: "day" },
+        time: { mode: "last_n_snapshots", n: 90, granularity: "day" },
         measure: "count_open_high",
         filters: [{ field: "image_id", operator: "in", value: ids }],
         group_by: ["image_id"],
@@ -1051,13 +1055,13 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
       .then(([critResult, highResult]) => {
         if (cancelled) return;
 
-        // Build lookup maps from image_id -> latest value
+        // Build lookup maps from image_id -> peak value across the window
         const critMap = new Map<string, number>();
         for (const s of critResult.series) {
           const imgId = (s.key as Record<string, string>)?.image_id;
           if (imgId) {
             const arr = s.y as number[];
-            critMap.set(imgId, arr[arr.length - 1] ?? 0);
+            critMap.set(imgId, Math.max(0, ...arr.filter((v): v is number => typeof v === "number")));
           }
         }
 
@@ -1066,7 +1070,7 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
           const imgId = (s.key as Record<string, string>)?.image_id;
           if (imgId) {
             const arr = s.y as number[];
-            highMap.set(imgId, arr[arr.length - 1] ?? 0);
+            highMap.set(imgId, Math.max(0, ...arr.filter((v): v is number => typeof v === "number")));
           }
         }
 
