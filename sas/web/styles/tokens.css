@@ -27,11 +27,12 @@
   --yellow: #FDD835;
   --purple: #CA87DA;
 
-  /* --- Severity --- */
-  --severity-critical: var(--red);
-  --severity-high: var(--orange);
-  --severity-medium: var(--yellow);
-  --severity-low: var(--grey-50);
+  /* --- Severity (Sysdig vulnerability palette — distinct from site brand) --- */
+  --severity-critical: #cb87da;    /* purple */
+  --severity-high: #ff7875;        /* coral red */
+  --severity-medium: #ffaa40;      /* orange */
+  --severity-low: #fdd836;         /* yellow */
+  --severity-negligible: #b5c4cc;  /* muted grey-blue */
 
   /* --- Semantic surface tokens — light mode (default) --- */
   --bg-base: var(--white);
