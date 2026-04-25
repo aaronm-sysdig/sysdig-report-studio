@@ -166,23 +166,32 @@ export function NewFixedRegressed() {
   const isLoading = newResult === null && fixedResult === null && regressedResult === null && !error;
 
   // Aggregate totals per date from all three results
-  const { dates: newDates, totals: newTotals } = newResult
+  const { dates: rawDates, totals: rawNewTotals } = newResult
     ? aggregateSeries(newResult)
     : { dates: [] as string[], totals: [] as number[] };
-  const { totals: fixedTotals } = fixedResult
+  const { totals: rawFixedTotals } = fixedResult
     ? aggregateSeries(fixedResult)
     : { totals: [] as number[] };
-  const { totals: regressedTotals } = regressedResult
+  const { totals: rawRegressedTotals } = regressedResult
     ? aggregateSeries(regressedResult)
     : { totals: [] as number[] };
 
-  // Build narrative footer
+  // Drop the first data point — it always shows every finding as "NEW" because
+  // there is no prior snapshot to compare against. This is technically correct
+  // but wildly misleading to a viewer.
+  const dates = rawDates.slice(1);
+  const newTotals = rawNewTotals.slice(1);
+  const fixedTotals = rawFixedTotals.slice(1);
+  const regressedTotals = rawRegressedTotals.slice(1);
+
+  // Build narrative footer (computed from TRIMMED arrays)
   const footer = newResult && fixedResult && regressedResult
     ? (() => {
         const totalNew = newTotals.reduce((a, b) => a + b, 0);
         const totalFixed = fixedTotals.reduce((a, b) => a + b, 0);
         const totalRegressed = regressedTotals.reduce((a, b) => a + b, 0);
-        return `In the last 90 snapshots, ${totalNew.toLocaleString("en-GB")} were newly discovered, ${totalFixed.toLocaleString("en-GB")} fixed, and ${totalRegressed.toLocaleString("en-GB")} regressed.`;
+        const n = dates.length;
+        return `Over the last ${n} snapshot${n === 1 ? "" : "s"} after the initial ingest, ${totalNew.toLocaleString("en-GB")} were newly discovered, ${totalFixed.toLocaleString("en-GB")} fixed, and ${totalRegressed.toLocaleString("en-GB")} regressed.`;
       })()
     : undefined;
 
@@ -201,8 +210,18 @@ export function NewFixedRegressed() {
   } else if (isLoading) {
     body = <ChartSkeleton />;
   } else {
-    const totalPoints = newTotals.length + fixedTotals.length + regressedTotals.length;
-    if (totalPoints === 0) {
+    // If we have ≤1 raw data point the trimmed window is empty — show a
+    // friendly message rather than a 0-point chart.
+    if (rawDates.length <= 1) {
+      body = (
+        <div
+          className="flex items-center justify-center h-[220px] text-sm"
+          style={{ color: "var(--fg-muted)" }}
+        >
+          Trend will develop after multiple snapshots have been ingested.
+        </div>
+      );
+    } else if (dates.length === 0) {
       body = (
         <div
           className="flex items-center justify-center h-[220px] text-sm"
@@ -214,7 +233,7 @@ export function NewFixedRegressed() {
     } else {
       body = (
         <ReactECharts
-          option={buildChartOption(newTotals, fixedTotals, regressedTotals, newDates, axisLabels)}
+          option={buildChartOption(newTotals, fixedTotals, regressedTotals, dates, axisLabels)}
           style={{ height: "220px", width: "100%" }}
           notMerge
           lazyUpdate={false}

@@ -10,6 +10,7 @@ import {
   flexRender,
   type ColumnDef,
   type SortingState,
+  type ColumnResizeMode,
 } from "@tanstack/react-table";
 import { WidgetCard } from "./WidgetCard";
 import { Input } from "@/components/ui/input";
@@ -74,9 +75,11 @@ const COLUMNS: ColumnDef<ImageRow>[] = [
   {
     accessorKey: "image",
     header: "Image",
+    // No fixed size — IMAGE column flexes to fill remaining space via colgroup
+    minSize: 120,
     cell: (info) => (
       <span
-        className="font-mono text-[12px] truncate block max-w-[260px]"
+        className="font-mono text-[12px] truncate block"
         title={String(info.getValue())}
         style={{ color: "var(--fg-primary)" }}
       >
@@ -87,6 +90,8 @@ const COLUMNS: ColumnDef<ImageRow>[] = [
   {
     accessorKey: "critical",
     header: "Critical",
+    size: 100,
+    minSize: 60,
     cell: (info) => {
       const val = info.getValue() as number;
       return (
@@ -102,6 +107,8 @@ const COLUMNS: ColumnDef<ImageRow>[] = [
   {
     accessorKey: "high",
     header: "High",
+    size: 100,
+    minSize: 60,
     cell: (info) => {
       const val = info.getValue() as number;
       return (
@@ -117,6 +124,8 @@ const COLUMNS: ColumnDef<ImageRow>[] = [
   {
     accessorKey: "openTotal",
     header: "Open total",
+    size: 120,
+    minSize: 80,
     cell: (info) => (
       <span
         className="text-[12px]"
@@ -129,6 +138,8 @@ const COLUMNS: ColumnDef<ImageRow>[] = [
   {
     accessorKey: "lastSeen",
     header: "Last seen",
+    size: 120,
+    minSize: 80,
     cell: (info) => {
       const val = info.getValue() as string | null;
       return (
@@ -239,6 +250,8 @@ export function ImageInventoryGrid() {
     return () => { cancelled = true; };
   }, []);
 
+  const columnResizeMode: ColumnResizeMode = "onChange";
+
   const table = useReactTable({
     data,
     columns: COLUMNS,
@@ -253,6 +266,8 @@ export function ImageInventoryGrid() {
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    enableColumnResizing: true,
+    columnResizeMode,
     // Allow manual pagination control
     manualPagination: false,
   });
@@ -310,11 +325,12 @@ export function ImageInventoryGrid() {
         <div style={{ overflowX: "auto" }}>
           <table className="w-full text-left border-collapse" style={{ tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "45%" }} />
-              <col style={{ width: "13%" }} />
-              <col style={{ width: "13%" }} />
-              <col style={{ width: "15%" }} />
-              <col style={{ width: "14%" }} />
+              {/* IMAGE column: auto — flexes to fill remaining space */}
+              <col style={{ width: "auto" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "120px" }} />
+              <col style={{ width: "120px" }} />
             </colgroup>
             <thead>
               {table.getHeaderGroups().map((headerGroup) => (
@@ -325,6 +341,7 @@ export function ImageInventoryGrid() {
                       onClick={header.column.getToggleSortingHandler()}
                       className="text-[10px] font-medium tracking-widest uppercase pb-2 pt-1 select-none"
                       style={{
+                        position: "relative",
                         color: "var(--fg-muted)",
                         cursor: header.column.getCanSort() ? "pointer" : "default",
                         borderBottom: "1px solid var(--border-subtle)",
@@ -334,6 +351,22 @@ export function ImageInventoryGrid() {
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       <SortIcon direction={header.column.getIsSorted()} />
+                      {header.column.getCanResize() && (
+                        <div
+                          onMouseDown={header.getResizeHandler()}
+                          onTouchStart={header.getResizeHandler()}
+                          style={{
+                            position: "absolute",
+                            right: 0,
+                            top: 0,
+                            height: "100%",
+                            width: "5px",
+                            cursor: "col-resize",
+                            userSelect: "none",
+                            touchAction: "none",
+                          }}
+                        />
+                      )}
                     </th>
                   ))}
                 </tr>
@@ -423,7 +456,6 @@ export function ImageInventoryGrid() {
     <WidgetCard
       label="Image Inventory"
       title="All images in the fleet"
-      footer="Click an image to see remediation details"
     >
       {body}
     </WidgetCard>
