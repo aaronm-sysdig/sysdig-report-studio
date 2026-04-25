@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +40,22 @@ function CalendarIcon() {
   );
 }
 
+function ExpandIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ContractIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function WidgetCard({
   label,
   title,
@@ -50,6 +66,7 @@ export function WidgetCard({
 }: WidgetCardProps) {
   const [footerExpanded, setFooterExpanded] = useState(false);
   const [footerOverflows, setFooterOverflows] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const footerRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
@@ -60,22 +77,56 @@ export function WidgetCard({
     }
   }, [footer]);
 
+  useEffect(() => {
+    if (!isFullScreen) return;
+
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullScreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [isFullScreen]);
+
   return (
     <div
-      className="flex flex-col shadow-card"
-      style={{
-        backgroundColor: "var(--bg-base)",
-        border: "1px solid var(--border-subtle)",
-        padding: "var(--p-card)",
-        borderRadius: "var(--radius)",
-        transitionDuration: "var(--dur-standard)",
-        transitionProperty: "border-color",
-      }}
+      className="flex flex-col"
+      style={
+        isFullScreen
+          ? {
+              position: "fixed",
+              inset: 0,
+              zIndex: 50,
+              backgroundColor: "var(--bg-base)",
+              border: "none",
+              borderRadius: 0,
+              padding: "20px 24px",
+              transitionDuration: "var(--dur-standard)",
+              transitionProperty: "border-color",
+            }
+          : {
+              backgroundColor: "var(--bg-base)",
+              border: "1px solid var(--border-subtle)",
+              padding: "var(--p-card)",
+              borderRadius: "var(--radius)",
+              boxShadow: "var(--shadow-card)",
+              transitionDuration: "var(--dur-standard)",
+              transitionProperty: "border-color",
+            }
+      }
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "var(--border-strong)";
+        if (!isFullScreen) {
+          (e.currentTarget as HTMLElement).style.borderColor = "var(--border-strong)";
+        }
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)";
+        if (!isFullScreen) {
+          (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)";
+        }
       }}
     >
       {/* Label row */}
@@ -104,6 +155,20 @@ export function WidgetCard({
               <CalendarIcon />
             </button>
           )}
+
+          {/* Full-screen toggle */}
+          <button
+            onClick={() => setIsFullScreen((v) => !v)}
+            className="p-1 rounded transition-opacity"
+            style={{ color: "var(--fg-muted)", opacity: 0.5 }}
+            title={isFullScreen ? "Exit full screen (Esc)" : "Full screen"}
+            aria-label={isFullScreen ? "Exit full screen" : "Enter full screen"}
+            aria-pressed={isFullScreen}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.opacity = "1")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.opacity = "0.5")}
+          >
+            {isFullScreen ? <ContractIcon /> : <ExpandIcon />}
+          </button>
 
           {/* 3-dot action menu */}
           <DropdownMenu>
