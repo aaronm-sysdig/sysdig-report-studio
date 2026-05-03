@@ -68,11 +68,26 @@ export async function getFindings(opts: {
   offset?: number;
   severity?: string;
   state?: string;
+  fix_available?: boolean;
+  in_use?: boolean;
+  public_exploit?: boolean;
 }): Promise<FindingsResponse> {
   const params = new URLSearchParams();
   if (opts.limit !== undefined) params.set("limit", String(opts.limit));
   if (opts.offset !== undefined) params.set("offset", String(opts.offset));
   if (opts.severity) params.set("severity", opts.severity);
   if (opts.state) params.set("state", opts.state);
+  if (opts.fix_available !== undefined) params.set("fix_available", opts.fix_available ? "1" : "0");
+  if (opts.in_use !== undefined) params.set("in_use", opts.in_use ? "1" : "0");
+  if (opts.public_exploit !== undefined) params.set("public_exploit", opts.public_exploit ? "1" : "0");
   return apiFetch<FindingsResponse>(`/api/findings?${params.toString()}`);
+}
+
+export type WorkloadCountsResponse = components["schemas"]["WorkloadCountsResponse"];
+
+/**
+ * GET /api/workload-counts — CVE-level workload blast radius counts.
+ */
+export async function getWorkloadCounts(): Promise<WorkloadCountsResponse> {
+  return apiFetch<WorkloadCountsResponse>("/api/workload-counts");
 }
