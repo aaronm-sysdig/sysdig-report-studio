@@ -25,6 +25,8 @@ def get_workload_counts(
     """Return workload counts per CVE aggregated from the latest snapshot date."""
     # Get latest snapshot date
     latest = conn.execute("SELECT MAX(date) FROM workload_runs_image_daily").fetchone()[0]
+    if latest is None:
+        return WorkloadCountsResponse(counts=[], snapshot_date="")
 
     # Join finding_state to workload_runs_image_daily to get workload counts per CVE
     rows = conn.execute("""
