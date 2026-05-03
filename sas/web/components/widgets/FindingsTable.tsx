@@ -1048,6 +1048,7 @@ export function FindingsTable() {
   const [weights, setWeights] = useState<WeightConfig>(DEFAULT_WEIGHTS);
   const [workloadCounts, setWorkloadCounts] = useState<Record<string, number>>({});
   const [snapshotDate, setSnapshotDate] = useState<string>("");
+  const [weightsLoading, setWeightsLoading] = useState(false);
 
   // Load weights from localStorage on mount
   useEffect(() => {
@@ -1062,6 +1063,7 @@ export function FindingsTable() {
   // Fetch workload counts when weighted mode is active
   useEffect(() => {
     if (groupBy !== "weighted") return;
+    setWeightsLoading(true);
     getWorkloadCounts()
       .then((data) => {
         const map: Record<string, number> = {};
@@ -1071,7 +1073,8 @@ export function FindingsTable() {
         setWorkloadCounts(map);
         setSnapshotDate(data.snapshot_date);
       })
-      .catch((e) => console.error("Failed to load workload counts:", e));
+      .catch((e) => console.error("Failed to load workload counts:", e))
+      .finally(() => setWeightsLoading(false));
   }, [groupBy]);
 
   // ---------------------------------------------------------------------------
@@ -1318,13 +1321,10 @@ export function FindingsTable() {
       });
     }
 
-    // Filter by severity gate
-    const filtered = result.filter(r => weights.severityGate.includes(r.severity));
-
-    // Sort by score descending
-    filtered.sort((a, b) => b.score - a.score);
-
-    return filtered;
+    // Filter by severity gate, sort by score descending (immutable)
+    return result
+      .filter(r => weights.severityGate.includes(r.severity))
+      .toSorted((a, b) => b.score - a.score);
   }, [filteredRows, groupBy, weights, workloadCounts]);
 
   // ---------------------------------------------------------------------------
@@ -1465,16 +1465,24 @@ export function FindingsTable() {
     if (groupBy === "weighted") {
       tableArea = (
         <div style={{ overflowX: "auto" }}>
-          <ResizableTable
-            data={weightedRows}
-            columns={WEIGHTED_COLUMNS}
-            emptyMessage="No findings match your severity gate, or no workload data available."
-            colSpan={WEIGHTED_COLUMNS.length}
-          />
-          {snapshotDate && (
-            <p className="text-[10px] mt-1" style={{ color: "var(--fg-muted)" }}>
-              Workload data from snapshot {snapshotDate}
-            </p>
+          {weightsLoading ? (
+            <div className="text-center text-[12px] py-6 animate-pulse" style={{ color: "var(--fg-muted)" }}>
+              Loading workload data…
+            </div>
+          ) : (
+            <>
+              <ResizableTable
+                data={weightedRows}
+                columns={WEIGHTED_COLUMNS}
+                emptyMessage="No findings match your severity gate, or no workload data available."
+                colSpan={WEIGHTED_COLUMNS.length}
+              />
+              {snapshotDate && (
+                <p className="text-[10px] mt-1" style={{ color: "var(--fg-muted)" }}>
+                  Workload data from snapshot {snapshotDate}
+                </p>
+              )}
+            </>
           )}
         </div>
       );
