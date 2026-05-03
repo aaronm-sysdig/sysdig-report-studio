@@ -36,13 +36,16 @@ export function loadWeights(): WeightConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_WEIGHTS;
     const parsed = JSON.parse(raw);
-    // Validate structure
+    // Validate structure and merge with defaults to handle partial configs
     if (
       Array.isArray(parsed.severityGate) &&
       parsed.weights &&
       typeof parsed.weights.Critical === "number"
     ) {
-      return parsed as WeightConfig;
+      return {
+        severityGate: parsed.severityGate,
+        weights: { ...DEFAULT_WEIGHTS.weights, ...parsed.weights },
+      };
     }
     return DEFAULT_WEIGHTS;
   } catch {
