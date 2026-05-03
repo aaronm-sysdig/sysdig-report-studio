@@ -1,11 +1,12 @@
 import { AppShell } from "@/components/app-shell/AppShell";
 import { FleetCriticalTrend } from "@/components/widgets/FleetCriticalTrend";
-import { NewFixedRegressed } from "@/components/widgets/NewFixedRegressed";
-import { KevRansomwareExposure } from "@/components/widgets/KevRansomwareExposure";
-import { RepositoryTagHygiene } from "@/components/widgets/RepositoryTagHygiene";
-import { ImageInventoryGrid } from "@/components/widgets/ImageInventoryGrid";
+import { FleetSeveritySnapshot } from "@/components/widgets/FleetSeveritySnapshot";
 import { FindingsTable } from "@/components/widgets/FindingsTable";
+import { ImageInventoryGrid } from "@/components/widgets/ImageInventoryGrid";
 import { ImageRemediationStory } from "@/components/widgets/ImageRemediationStory";
+import { KevRansomwareExposure } from "@/components/widgets/KevRansomwareExposure";
+import { NewFixedRegressed } from "@/components/widgets/NewFixedRegressed";
+import { RepositoryTagHygiene } from "@/components/widgets/RepositoryTagHygiene";
 
 export default function DashboardPage() {
   return (
@@ -18,12 +19,17 @@ export default function DashboardPage() {
           gap: "var(--gap-widget)",
         }}
       >
-        {/* Row 1 — flagship widget, full width */}
+        {/* Row 1 — fleet severity snapshot, full width */}
+        <div style={{ gridColumn: "span 12" }}>
+          <FleetSeveritySnapshot />
+        </div>
+
+        {/* Row 2 — flagship widget, full width */}
         <div style={{ gridColumn: "span 12" }}>
           <ImageRemediationStory />
         </div>
 
-        {/* Row 2 — fleet metrics side by side */}
+        {/* Row 3 — fleet metrics side by side */}
         <div style={{ gridColumn: "span 6" }}>
           <FleetCriticalTrend />
         </div>
@@ -31,7 +37,7 @@ export default function DashboardPage() {
           <NewFixedRegressed />
         </div>
 
-        {/* Row 3 — exposure + repository hygiene */}
+        {/* Row 4 — exposure + repository hygiene */}
         <div style={{ gridColumn: "span 6" }}>
           <KevRansomwareExposure />
         </div>
@@ -39,12 +45,12 @@ export default function DashboardPage() {
           <RepositoryTagHygiene />
         </div>
 
-        {/* Row 4 — image inventory full width */}
+        {/* Row 5 — image inventory full width */}
         <div style={{ gridColumn: "span 12" }}>
           <ImageInventoryGrid />
         </div>
 
-        {/* Row 5 — findings table full width */}
+        {/* Row 6 — findings table full width */}
         <div style={{ gridColumn: "span 12" }}>
           <FindingsTable />
         </div>
