@@ -9,19 +9,20 @@ import {
   flexRender,
   type ColumnDef,
   type SortingState,
-  type ColumnResizeMode,
 } from "@tanstack/react-table";
 import { WidgetCard } from "./WidgetCard";
 import { Input } from "@/components/ui/input";
-import { getFindings } from "@/lib/api/client";
-import type { FindingsResponse } from "@/lib/api/client";
+import { getFindings, getWorkloadCounts } from "@/lib/api/client";
+import type { FindingsResponse, WorkloadCountsResponse } from "@/lib/api/client";
 import { CHART_COLORS } from "@/lib/charts/defaults";
+import { TABLE_DEFAULTS } from "@/lib/table.defaults";
+import { loadWeights, saveWeights, DEFAULT_WEIGHTS, type WeightConfig } from "@/lib/weighted-weights";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 type FindingRow = FindingsResponse["rows"][number];
-type GroupBy = "none" | "cve" | "image" | "package";
+type GroupBy = "none" | "cve" | "image" | "package" | "weighted";
 
 // Severity ordering for max-severity aggregation
 const SEVERITY_ORDER: Record<string, number> = {
@@ -66,6 +67,17 @@ interface PackageRow {
   distinct_images: number;
 }
 
+interface WeightedRow {
+  cve_id: string;
+  severity: string;
+  workload_count: number;
+  in_use: boolean;
+  fix_available: boolean;
+  public_exploit: boolean;
+  score: number;
+  breakdown: string;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -76,8 +88,9 @@ const GROUP_BY_OPTIONS: { value: GroupBy; label: string }[] = [
   { value: "cve", label: "CVE" },
   { value: "image", label: "Image" },
   { value: "package", label: "Package" },
+  { value: "weighted", label: "Weighted" },
 ];
-const LIMIT_OPTIONS = [50, 100, 250, 500] as const;
+const LIMIT_OPTIONS = [25, 50, 100, 250, 500] as const;
 type LimitOption = (typeof LIMIT_OPTIONS)[number];
 
 // ---------------------------------------------------------------------------
@@ -166,6 +179,60 @@ const FLAT_COLUMNS: ColumnDef<FindingRow>[] = [
     size: 90,
     minSize: 60,
     cell: (info) => <SeverityPill value={String(info.getValue())} />,
+  },
+  {
+    accessorKey: "fix_available",
+    header: "Fix",
+    size: 60,
+    minSize: 40,
+    cell: (info) => {
+      const val = info.getValue() as boolean;
+      return (
+        <span
+          className="text-[11px] text-center block"
+          style={{ color: val ? CHART_COLORS.fixedGreen : "var(--fg-muted)" }}
+          title={val ? "Fix available" : "No fix available"}
+        >
+          {val ? "✓" : "—"}
+        </span>
+      );
+    },
+  },
+  {
+    accessorKey: "in_use",
+    header: "In-use",
+    size: 70,
+    minSize: 50,
+    cell: (info) => {
+      const val = info.getValue() as boolean;
+      return (
+        <span
+          className="text-[11px] text-center block"
+          style={{ color: val ? CHART_COLORS.fixedGreen : CHART_COLORS.severityMedium }}
+          title={val ? "Package in use" : "Not in use"}
+        >
+          {val ? "✓" : "✕"}
+        </span>
+      );
+    },
+  },
+  {
+    accessorKey: "public_exploit",
+    header: "Exploit",
+    size: 70,
+    minSize: 50,
+    cell: (info) => {
+      const val = info.getValue() as boolean;
+      return (
+        <span
+          className="text-[11px] text-center block"
+          style={{ color: val ? CHART_COLORS.darkRed : "var(--fg-muted)" }}
+          title={val ? "Public exploit" : "No known exploit"}
+        >
+          {val ? "⚠" : "—"}
+        </span>
+      );
+    },
   },
   {
     accessorKey: "image_name",
@@ -517,6 +584,135 @@ const PACKAGE_COLUMNS: ColumnDef<PackageRow>[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Column definitions — Weighted
+// ---------------------------------------------------------------------------
+const WEIGHTED_COLUMNS: ColumnDef<WeightedRow>[] = [
+  {
+    accessorKey: "score",
+    header: "Score",
+    size: 90,
+    minSize: 60,
+    cell: (info) => (
+      <span
+        className="text-[15px] font-bold"
+        style={{ color: "var(--severity-critical)" }}
+      >
+        {(info.getValue() as number).toLocaleString("en-GB")}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "cve_id",
+    header: "CVE",
+    size: 150,
+    minSize: 100,
+    cell: (info) => (
+      <span
+        className="font-mono text-[12px] truncate block"
+        title={String(info.getValue())}
+        style={{ color: "var(--fg-primary)" }}
+      >
+        {String(info.getValue())}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "severity",
+    header: "Severity",
+    size: 90,
+    minSize: 60,
+    cell: (info) => <SeverityPill value={String(info.getValue())} />,
+  },
+  {
+    accessorKey: "workload_count",
+    header: "Workloads",
+    size: 100,
+    minSize: 70,
+    cell: (info) => (
+      <span className="text-[11px] font-semibold" style={{ color: "var(--fg-primary)" }}>
+        {(info.getValue() as number).toLocaleString("en-GB")}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "fix_available",
+    header: "Fix",
+    size: 60,
+    minSize: 40,
+    cell: (info) => {
+      const val = info.getValue() as boolean;
+      return (
+        <span
+          className="text-[11px] text-center block"
+          style={{ color: val ? CHART_COLORS.fixedGreen : "var(--fg-muted)" }}
+          title={val ? "Fix available" : "No fix available"}
+        >
+          {val ? "✓" : "—"}
+        </span>
+      );
+    },
+  },
+  {
+    accessorKey: "in_use",
+    header: "In-use",
+    size: 70,
+    minSize: 50,
+    cell: (info) => {
+      const val = info.getValue() as boolean;
+      return (
+        <span
+          className="text-[11px] text-center block"
+          style={{ color: val ? CHART_COLORS.fixedGreen : CHART_COLORS.severityMedium }}
+          title={val ? "Package in use" : "Not in use"}
+        >
+          {val ? "✓" : "✕"}
+        </span>
+      );
+    },
+  },
+  {
+    accessorKey: "public_exploit",
+    header: "Exploit",
+    size: 70,
+    minSize: 50,
+    cell: (info) => {
+      const val = info.getValue() as boolean;
+      return (
+        <span
+          className="text-[11px] text-center block"
+          style={{ color: val ? CHART_COLORS.darkRed : "var(--fg-muted)" }}
+          title={val ? "Public exploit" : "No known exploit"}
+        >
+          {val ? "⚠" : "—"}
+        </span>
+      );
+    },
+  },
+  {
+    accessorKey: "breakdown",
+    header: () => (
+      <span title="Score = (Severity + In Use + Has Fix + Exploit) × Workloads">
+        Breakdown
+        <br />
+        <small style={{ fontWeight: "normal", fontSize: "10px", opacity: 0.6 }}>
+          (Severity + In Use + Has Fix + Exploit) × Workloads
+        </small>
+      </span>
+    ),
+    size: 160,
+    minSize: 120,
+    cell: (info) => (
+      <span
+        className="font-mono text-[11px]"
+        style={{ color: "var(--fg-muted)" }}
+      >
+        {String(info.getValue())}
+      </span>
+    ),
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
 function TableSkeleton() {
@@ -549,24 +745,56 @@ function FilterSelect({
   label: string;
 }) {
   return (
-    <select
-      aria-label={label}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="text-[11px] rounded px-2 py-1"
-      style={{
-        border: "1px solid var(--border-subtle)",
-        background: "var(--bg-surface)",
-        color: "var(--fg-primary)",
-        cursor: "pointer",
-      }}
+    <div className="flex items-center gap-1">
+      <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>{label}:</span>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="text-[11px] rounded px-2 py-1"
+        style={{
+          border: "1px solid var(--border-subtle)",
+          background: "var(--bg-surface)",
+          color: "var(--fg-primary)",
+          cursor: "pointer",
+        }}
+      >
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Boolean toggle checkbox
+// ---------------------------------------------------------------------------
+function BooleanCheckbox({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label
+      className="flex items-center gap-1 text-[11px] cursor-pointer select-none"
+      style={{ color: "var(--fg-primary)" }}
     >
-      {options.map((opt) => (
-        <option key={opt} value={opt}>
-          {opt}
-        </option>
-      ))}
-    </select>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="rounded"
+        style={{ accentColor: "var(--severity-high)" }}
+      />
+      {label}
+    </label>
   );
 }
 
@@ -585,9 +813,9 @@ function ResizableTable<T extends object>({
   colSpan: number;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
-  const columnResizeMode: ColumnResizeMode = "onChange";
 
   const table = useReactTable({
+    ...TABLE_DEFAULTS,
     data,
     columns,
     state: { sorting },
@@ -595,8 +823,6 @@ function ResizableTable<T extends object>({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    enableColumnResizing: true,
-    columnResizeMode,
     manualPagination: true,
   });
 
@@ -688,14 +914,118 @@ function ResizableTable<T extends object>({
 }
 
 // ---------------------------------------------------------------------------
+// Weight configuration panel
+// ---------------------------------------------------------------------------
+function WeightConfigPanel({
+  config,
+  onChange,
+}: {
+  config: WeightConfig;
+  onChange: (config: WeightConfig) => void;
+}) {
+  const severities = ["Critical", "High", "Medium", "Low", "Negligible"];
+  const weightLabels: { key: keyof WeightConfig["weights"]; label: string }[] = [
+    { key: "Critical", label: "Critical" },
+    { key: "High", label: "High" },
+    { key: "Medium", label: "Medium" },
+    { key: "Low", label: "Low" },
+    { key: "in_use", label: "In-use" },
+    { key: "fix_available", label: "Has Fix" },
+    { key: "public_exploit", label: "Exploit" },
+  ];
+
+  return (
+    <div
+      className="rounded-lg p-3"
+      style={{
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border-subtle)",
+        borderLeft: "3px solid var(--severity-critical)",
+      }}
+    >
+      <div
+        className="text-[11px] uppercase tracking-wider mb-2"
+        style={{ color: "var(--severity-critical)" }}
+      >
+        Weighted Configuration
+      </div>
+
+      {/* Severity gate */}
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>Severity:</span>
+        <div className="flex gap-2">
+          {severities.map((sev) => (
+            <label
+              key={sev}
+              className="flex items-center gap-1 text-[12px] cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={config.severityGate.includes(sev)}
+                onChange={(e) => {
+                  const newGate = e.target.checked
+                    ? [...config.severityGate, sev]
+                    : config.severityGate.filter((s) => s !== sev);
+                  onChange({ ...config, severityGate: newGate });
+                }}
+                className="rounded"
+                style={{ accentColor: "var(--severity-critical)" }}
+              />
+              <SeverityPill value={sev} />
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Weight spin buttons */}
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>Weights:</span>
+        <div className="flex flex-wrap gap-3">
+          {weightLabels.map(({ key, label }) => (
+            <div key={key} className="flex items-center gap-1">
+              <label className="text-[12px]" style={{ color: "var(--fg-muted)" }}>
+                {label}
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={1}
+                value={config.weights[key]}
+                onChange={(e) => {
+                  const val = Math.max(0, Math.min(10, parseInt(e.target.value) || 0));
+                  onChange({
+                    ...config,
+                    weights: { ...config.weights, [key]: val },
+                  });
+                }}
+                className="w-[50px] text-center text-[12px] rounded px-1 py-0.5"
+                style={{
+                  border: "1px solid var(--border-subtle)",
+                  background: "var(--bg-surface)",
+                  color: "var(--fg-primary)",
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 export function FindingsTable() {
   // Server-side pagination / filter state
   const [severityFilter, setSeverityFilter] = useState<string>("All");
-  const [stateFilter, setStateFilter] = useState<string>("All");
+  const [stateFilter, setStateFilter] = useState<string>("OPEN");
+  const [fixFilter, setFixFilter] = useState<boolean>(false);
+  const [inUseFilter, setInUseFilter] = useState<boolean>(false);
+  const [exploitFilter, setExploitFilter] = useState<boolean>(false);
   const [serverPage, setServerPage] = useState(0);
-  const [limit, setLimit] = useState<LimitOption>(100);
+  const [limit, setLimit] = useState<LimitOption>(25);
 
   // Group-by state
   const [groupBy, setGroupBy] = useState<GroupBy>("none");
@@ -714,13 +1044,41 @@ export function FindingsTable() {
     { id: "last_seen", desc: true },
   ]);
 
-  const columnResizeMode: ColumnResizeMode = "onChange";
+  // Weighted scoring state
+  const [weights, setWeights] = useState<WeightConfig>(DEFAULT_WEIGHTS);
+  const [workloadCounts, setWorkloadCounts] = useState<Record<string, number>>({});
+  const [snapshotDate, setSnapshotDate] = useState<string>("");
+
+  // Load weights from localStorage on mount
+  useEffect(() => {
+    setWeights(loadWeights());
+  }, []);
+
+  // Save weights to localStorage when changed
+  useEffect(() => {
+    saveWeights(weights);
+  }, [weights]);
+
+  // Fetch workload counts when weighted mode is active
+  useEffect(() => {
+    if (groupBy !== "weighted") return;
+    getWorkloadCounts()
+      .then((data) => {
+        const map: Record<string, number> = {};
+        for (const entry of data.counts) {
+          map[entry.cve_id] = entry.workload_count;
+        }
+        setWorkloadCounts(map);
+        setSnapshotDate(data.snapshot_date);
+      })
+      .catch((e) => console.error("Failed to load workload counts:", e));
+  }, [groupBy]);
 
   // ---------------------------------------------------------------------------
   // Fetch
   // ---------------------------------------------------------------------------
   const fetchPage = useCallback(
-    (page: number, sev: string, st: string, pageLimit: number) => {
+    (page: number, sev: string, st: string, fix: boolean, inUse: boolean, exploit: boolean, pageLimit: number) => {
       setLoading(true);
       setError(null);
       getFindings({
@@ -728,6 +1086,9 @@ export function FindingsTable() {
         offset: page * pageLimit,
         severity: sev === "All" ? undefined : sev,
         state: st === "All" ? undefined : st,
+        fix_available: fix ? true : undefined,
+        in_use: inUse ? true : undefined,
+        public_exploit: exploit ? true : undefined,
       })
         .then((data) => {
           setRows(data.rows);
@@ -743,8 +1104,8 @@ export function FindingsTable() {
   );
 
   useEffect(() => {
-    fetchPage(serverPage, severityFilter, stateFilter, limit);
-  }, [fetchPage, serverPage, severityFilter, stateFilter, limit]);
+    fetchPage(serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, limit);
+  }, [fetchPage, serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, limit]);
 
   // Reset to page 0 when filters/limit change
   const handleSeverityChange = (v: string) => {
@@ -754,6 +1115,21 @@ export function FindingsTable() {
   };
   const handleStateChange = (v: string) => {
     setStateFilter(v);
+    setServerPage(0);
+    setGlobalFilter("");
+  };
+  const handleFixChange = (v: boolean) => {
+    setFixFilter(v);
+    setServerPage(0);
+    setGlobalFilter("");
+  };
+  const handleInUseChange = (v: boolean) => {
+    setInUseFilter(v);
+    setServerPage(0);
+    setGlobalFilter("");
+  };
+  const handleExploitChange = (v: boolean) => {
+    setExploitFilter(v);
     setServerPage(0);
     setGlobalFilter("");
   };
@@ -878,10 +1254,84 @@ export function FindingsTable() {
     }));
   }, [filteredRows, groupBy]);
 
+  const weightedRows = useMemo<WeightedRow[]>(() => {
+    if (groupBy !== "weighted") return [];
+
+    // First aggregate by CVE (same as cveRows logic)
+    const map = new Map<string, {
+      severities: string[];
+      inUse: boolean;
+      fixAvailable: boolean;
+      publicExploit: boolean
+    }>();
+
+    for (const row of filteredRows) {
+      const key = row.cve_id;
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, {
+          severities: [row.severity],
+          inUse: row.in_use,
+          fixAvailable: row.fix_available,
+          publicExploit: row.public_exploit,
+        });
+      } else {
+        existing.severities.push(row.severity);
+        if (row.in_use) existing.inUse = true;
+        if (row.fix_available) existing.fixAvailable = true;
+        if (row.public_exploit) existing.publicExploit = true;
+      }
+    }
+
+    // Compute scores
+    const result: WeightedRow[] = [];
+    for (const [cve_id, agg] of map.entries()) {
+      const severity = maxSeverity(agg.severities);
+      const workload_count = workloadCounts[cve_id] || 0;
+      if (workload_count === 0) continue; // Skip CVEs with no workload data
+
+      const sevWeight = weights.weights[severity as keyof typeof weights.weights] || 0;
+      const flags = sevWeight
+        + (agg.inUse ? weights.weights.in_use : 0)
+        + (agg.fixAvailable ? weights.weights.fix_available : 0)
+        + (agg.publicExploit ? weights.weights.public_exploit : 0);
+
+      const score = flags * workload_count;
+
+      // Build breakdown string
+      const parts: number[] = [];
+      if (sevWeight > 0) parts.push(sevWeight);
+      if (agg.inUse && weights.weights.in_use > 0) parts.push(weights.weights.in_use);
+      if (agg.fixAvailable && weights.weights.fix_available > 0) parts.push(weights.weights.fix_available);
+      if (agg.publicExploit && weights.weights.public_exploit > 0) parts.push(weights.weights.public_exploit);
+      const breakdown = `(${parts.join(" + ")}) × ${workload_count}`;
+
+      result.push({
+        cve_id,
+        severity,
+        workload_count,
+        in_use: agg.inUse,
+        fix_available: agg.fixAvailable,
+        public_exploit: agg.publicExploit,
+        score,
+        breakdown,
+      });
+    }
+
+    // Filter by severity gate
+    const filtered = result.filter(r => weights.severityGate.includes(r.severity));
+
+    // Sort by score descending
+    filtered.sort((a, b) => b.score - a.score);
+
+    return filtered;
+  }, [filteredRows, groupBy, weights, workloadCounts]);
+
   // ---------------------------------------------------------------------------
   // Flat-list TanStack table (used only when groupBy === "none")
   // ---------------------------------------------------------------------------
   const flatTable = useReactTable({
+    ...TABLE_DEFAULTS,
     data: filteredRows,
     columns: FLAT_COLUMNS,
     state: { sorting },
@@ -889,8 +1339,6 @@ export function FindingsTable() {
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    enableColumnResizing: true,
-    columnResizeMode,
     manualPagination: true,
   });
 
@@ -907,6 +1355,7 @@ export function FindingsTable() {
     cve: "No CVEs match your filters.",
     image: "No images match your filters.",
     package: "No packages match your filters.",
+    weighted: "No findings match your severity gate, or no workload data available.",
   };
 
   // ---------------------------------------------------------------------------
@@ -937,17 +1386,20 @@ export function FindingsTable() {
           className="text-[12px] max-w-[240px]"
         />
         <FilterSelect
-          label="Severity filter"
+          label="Severity"
           value={severityFilter}
           options={SEVERITIES}
           onChange={handleSeverityChange}
         />
         <FilterSelect
-          label="State filter"
+          label="State"
           value={stateFilter}
           options={STATES}
           onChange={handleStateChange}
         />
+        <BooleanCheckbox label="Has Fix" checked={fixFilter} onChange={handleFixChange} />
+        <BooleanCheckbox label="In-use" checked={inUseFilter} onChange={handleInUseChange} />
+        <BooleanCheckbox label="Has Exploit" checked={exploitFilter} onChange={handleExploitChange} />
         {/* Group-by */}
         <div className="flex items-center gap-1">
           <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>Group by:</span>
@@ -992,12 +1444,41 @@ export function FindingsTable() {
             ))}
           </select>
         </div>
+        {/* Weight config panel — shows when weighted mode is active */}
+        {groupBy === "weighted" && (
+          <div className="w-full mt-2">
+            <WeightConfigPanel
+              config={weights}
+              onChange={(newWeights) => {
+                setWeights(newWeights);
+                setServerPage(0);
+                setGlobalFilter("");
+              }}
+            />
+          </div>
+        )}
       </div>
     );
 
     // Table area — switches based on groupBy
     let tableArea: React.ReactNode;
-    if (groupBy === "none") {
+    if (groupBy === "weighted") {
+      tableArea = (
+        <div style={{ overflowX: "auto" }}>
+          <ResizableTable
+            data={weightedRows}
+            columns={WEIGHTED_COLUMNS}
+            emptyMessage="No findings match your severity gate, or no workload data available."
+            colSpan={WEIGHTED_COLUMNS.length}
+          />
+          {snapshotDate && (
+            <p className="text-[10px] mt-1" style={{ color: "var(--fg-muted)" }}>
+              Workload data from snapshot {snapshotDate}
+            </p>
+          )}
+        </div>
+      );
+    } else if (groupBy === "none") {
       tableArea = (
         <div style={{ overflowX: "auto" }}>
           <table className="w-full text-left border-collapse" style={{ tableLayout: "fixed" }}>
@@ -1107,7 +1588,7 @@ export function FindingsTable() {
           />
         </div>
       );
-    } else {
+    } else if (groupBy === "package") {
       tableArea = (
         <div style={{ overflowX: "auto" }}>
           <ResizableTable
