@@ -33,3 +33,7 @@ sas.duckdb.wal
 *.duckdb.wal
 ~/sysdig-vuln-data/
 .pytest_cache/
+
+# Worktrees and brainstorming artifacts
+.worktrees/
+.superpowers/
