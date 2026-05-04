@@ -33,15 +33,22 @@ export default function DashboardPage() {
 
         {/* Row 3 — findings table, full width */}
         <div style={{ gridColumn: "span 12" }}>
-          <FindingsTable />
+          <Suspense fallback={<div className="animate-pulse" style={{ minHeight: "200px" }} />}>
+            <FindingsTable />
+          </Suspense>
         </div>
 
-        {/* Row 4 — flagship widget, full width */}
+        {/* Row 4 — image inventory full width */}
+        <div style={{ gridColumn: "span 12" }}>
+          <ImageInventoryGrid />
+        </div>
+
+        {/* Row 5 — flagship widget, full width */}
         <div style={{ gridColumn: "span 12" }}>
           <ImageRemediationStory />
         </div>
 
-        {/* Row 5 — fleet metrics side by side */}
+        {/* Row 6 — fleet metrics side by side */}
         <div style={{ gridColumn: "span 6" }}>
           <FleetCriticalTrend />
         </div>
@@ -49,24 +56,12 @@ export default function DashboardPage() {
           <NewFixedRegressed />
         </div>
 
-        {/* Row 6 — exposure + repository hygiene */}
+        {/* Row 7 — exposure + repository hygiene */}
         <div style={{ gridColumn: "span 6" }}>
           <KevRansomwareExposure />
         </div>
         <div style={{ gridColumn: "span 6" }}>
           <RepositoryTagHygiene />
-        </div>
-
-        {/* Row 7 — image inventory full width */}
-        <div style={{ gridColumn: "span 12" }}>
-          <ImageInventoryGrid />
-        </div>
-
-        {/* Row 8 — findings table full width */}
-        <div style={{ gridColumn: "span 12" }}>
-          <Suspense fallback={<div className="animate-pulse" style={{ minHeight: "200px" }} />}>
-            <FindingsTable />
-          </Suspense>
         </div>
       </div>
     </AppShell>
