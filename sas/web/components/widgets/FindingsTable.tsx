@@ -13,7 +13,7 @@ import {
 import { WidgetCard } from "./WidgetCard";
 import { Input } from "@/components/ui/input";
 import { getFindings, getWorkloadCounts } from "@/lib/api/client";
-import type { FindingsResponse, WorkloadCountsResponse } from "@/lib/api/client";
+import type { FindingsResponse, WeightedCve } from "@/lib/api/client";
 import { CHART_COLORS } from "@/lib/charts/defaults";
 import { TABLE_DEFAULTS } from "@/lib/table.defaults";
 import { loadWeights, saveWeights, DEFAULT_WEIGHTS, type WeightConfig } from "@/lib/weighted-weights";
@@ -1046,7 +1046,7 @@ export function FindingsTable() {
 
   // Weighted scoring state
   const [weights, setWeights] = useState<WeightConfig>(DEFAULT_WEIGHTS);
-  const [workloadCounts, setWorkloadCounts] = useState<Record<string, number>>({});
+  const [weightedCves, setWeightedCves] = useState<WeightedCve[]>([]);
   const [snapshotDate, setSnapshotDate] = useState<string>("");
   const [weightsLoading, setWeightsLoading] = useState(false);
 
@@ -1060,17 +1060,13 @@ export function FindingsTable() {
     saveWeights(weights);
   }, [weights]);
 
-  // Fetch workload counts when weighted mode is active
+  // Fetch all CVE scoring data when weighted mode is active
   useEffect(() => {
     if (groupBy !== "weighted") return;
     setWeightsLoading(true);
     getWorkloadCounts()
       .then((data) => {
-        const map: Record<string, number> = {};
-        for (const entry of data.counts) {
-          map[entry.cve_id] = entry.workload_count;
-        }
-        setWorkloadCounts(map);
+        setWeightedCves(data.counts);
         setSnapshotDate(data.snapshot_date);
       })
       .catch((e) => console.error("Failed to load workload counts:", e))
@@ -1260,72 +1256,52 @@ export function FindingsTable() {
   const weightedRows = useMemo<WeightedRow[]>(() => {
     if (groupBy !== "weighted") return [];
 
-    // First aggregate by CVE (same as cveRows logic)
-    const map = new Map<string, {
-      severities: string[];
-      inUse: boolean;
-      fixAvailable: boolean;
-      publicExploit: boolean
-    }>();
-
-    for (const row of filteredRows) {
-      const key = row.cve_id;
-      const existing = map.get(key);
-      if (!existing) {
-        map.set(key, {
-          severities: [row.severity],
-          inUse: row.in_use,
-          fixAvailable: row.fix_available,
-          publicExploit: row.public_exploit,
-        });
-      } else {
-        existing.severities.push(row.severity);
-        if (row.in_use) existing.inUse = true;
-        if (row.fix_available) existing.fixAvailable = true;
-        if (row.public_exploit) existing.publicExploit = true;
-      }
-    }
-
-    // Compute scores
-    const result: WeightedRow[] = [];
-    for (const [cve_id, agg] of map.entries()) {
-      const severity = maxSeverity(agg.severities);
-      const workload_count = workloadCounts[cve_id] || 0;
-      if (workload_count === 0) continue; // Skip CVEs with no workload data
-
-      const sevWeight = weights.weights[severity as keyof typeof weights.weights] || 0;
+    // Score each CVE from the backend-provided data
+    const scored: WeightedRow[] = [];
+    for (const cve of weightedCves) {
+      const sevWeight = weights.weights[cve.severity as keyof typeof weights.weights] || 0;
       const flags = sevWeight
-        + (agg.inUse ? weights.weights.in_use : 0)
-        + (agg.fixAvailable ? weights.weights.fix_available : 0)
-        + (agg.publicExploit ? weights.weights.public_exploit : 0);
+        + (cve.in_use ? weights.weights.in_use : 0)
+        + (cve.fix_available ? weights.weights.fix_available : 0)
+        + (cve.public_exploit ? weights.weights.public_exploit : 0);
 
-      const score = flags * workload_count;
+      const score = flags * cve.workload_count;
 
       // Build breakdown string
       const parts: number[] = [];
       if (sevWeight > 0) parts.push(sevWeight);
-      if (agg.inUse && weights.weights.in_use > 0) parts.push(weights.weights.in_use);
-      if (agg.fixAvailable && weights.weights.fix_available > 0) parts.push(weights.weights.fix_available);
-      if (agg.publicExploit && weights.weights.public_exploit > 0) parts.push(weights.weights.public_exploit);
-      const breakdown = `(${parts.join(" + ")}) × ${workload_count}`;
+      if (cve.in_use && weights.weights.in_use > 0) parts.push(weights.weights.in_use);
+      if (cve.fix_available && weights.weights.fix_available > 0) parts.push(weights.weights.fix_available);
+      if (cve.public_exploit && weights.weights.public_exploit > 0) parts.push(weights.weights.public_exploit);
+      const breakdown = `(${parts.join(" + ")}) × ${cve.workload_count}`;
 
-      result.push({
-        cve_id,
-        severity,
-        workload_count,
-        in_use: agg.inUse,
-        fix_available: agg.fixAvailable,
-        public_exploit: agg.publicExploit,
+      scored.push({
+        cve_id: cve.cve_id,
+        severity: cve.severity,
+        workload_count: cve.workload_count,
+        in_use: cve.in_use,
+        fix_available: cve.fix_available,
+        public_exploit: cve.public_exploit,
         score,
         breakdown,
       });
     }
 
-    // Filter by severity gate, sort by score descending (immutable)
-    return result
+    // Filter by severity gate, sort by score descending
+    const filtered = scored
       .filter(r => weights.severityGate.includes(r.severity))
       .toSorted((a, b) => b.score - a.score);
-  }, [filteredRows, groupBy, weights, workloadCounts]);
+
+    // Client-side pagination
+    const start = serverPage * limit;
+    return filtered.slice(start, start + limit);
+  }, [weightedCves, groupBy, weights, serverPage, limit]);
+
+  // Total count after severity gate (for pagination footer)
+  const weightedTotal = useMemo(() => {
+    if (groupBy !== "weighted") return 0;
+    return weightedCves.filter(c => weights.severityGate.includes(c.severity)).length;
+  }, [weightedCves, groupBy, weights]);
 
   // ---------------------------------------------------------------------------
   // Flat-list TanStack table (used only when groupBy === "none")
@@ -1609,7 +1585,11 @@ export function FindingsTable() {
       );
     }
 
-    // Pagination footer (only meaningful in flat mode; grouped rows show count caption)
+    // Pagination footer
+    const weightedTotalPages = Math.max(1, Math.ceil(weightedTotal / limit));
+    const weightedFirstRow = serverPage * limit + 1;
+    const weightedLastRow = Math.min((serverPage + 1) * limit, weightedTotal);
+
     const paginationFooter = groupBy === "none" ? (
       <div className="flex items-center justify-between pt-1">
         <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
@@ -1641,6 +1621,43 @@ export function FindingsTable() {
               border: "1px solid var(--border-subtle)",
               color: "var(--fg-primary)",
               cursor: serverPage >= totalPages - 1 ? "not-allowed" : "pointer",
+            }}
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    ) : groupBy === "weighted" ? (
+      <div className="flex items-center justify-between pt-1">
+        <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
+          {weightedTotal === 0
+            ? "No CVEs match your severity gate"
+            : `Showing ${weightedFirstRow}–${weightedLastRow} of ${weightedTotal.toLocaleString("en-GB")} CVEs`}
+        </span>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setServerPage((p) => Math.max(0, p - 1))}
+            disabled={serverPage === 0}
+            className="text-[11px] px-2 py-0.5 rounded disabled:opacity-30"
+            style={{
+              border: "1px solid var(--border-subtle)",
+              color: "var(--fg-primary)",
+              cursor: serverPage === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            Prev
+          </button>
+          <span className="text-[11px] self-center" style={{ color: "var(--fg-muted)" }}>
+            {serverPage + 1} / {weightedTotalPages}
+          </span>
+          <button
+            onClick={() => setServerPage((p) => Math.min(weightedTotalPages - 1, p + 1))}
+            disabled={serverPage >= weightedTotalPages - 1}
+            className="text-[11px] px-2 py-0.5 rounded disabled:opacity-30"
+            style={{
+              border: "1px solid var(--border-subtle)",
+              color: "var(--fg-primary)",
+              cursor: serverPage >= weightedTotalPages - 1 ? "not-allowed" : "pointer",
             }}
           >
             Next

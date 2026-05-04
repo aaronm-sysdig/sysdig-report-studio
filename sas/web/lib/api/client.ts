@@ -84,6 +84,7 @@ export async function getFindings(opts: {
 }
 
 export type WorkloadCountsResponse = components["schemas"]["WorkloadCountsResponse"];
+export type WeightedCve = components["schemas"]["WeightedCve"];
 
 /**
  * GET /api/workload-counts — CVE-level workload blast radius counts.

@@ -269,17 +269,25 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
-        /** WorkloadCount */
-        WorkloadCount: {
+        /** WeightedCve */
+        WeightedCve: {
             /** Cve Id */
             cve_id: string;
+            /** Severity */
+            severity: string;
             /** Workload Count */
             workload_count: number;
+            /** In Use */
+            in_use: boolean;
+            /** Fix Available */
+            fix_available: boolean;
+            /** Public Exploit */
+            public_exploit: boolean;
         };
         /** WorkloadCountsResponse */
         WorkloadCountsResponse: {
             /** Counts */
-            counts: components["schemas"]["WorkloadCount"][];
+            counts: components["schemas"]["WeightedCve"][];
             /** Snapshot Date */
             snapshot_date: string;
         };
