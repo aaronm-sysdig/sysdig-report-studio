@@ -73,7 +73,7 @@ export interface paths {
         };
         /**
          * List Findings
-         * @description Paginated finding_state rows. Filters: severity, state, fix_available, in_use, public_exploit. Ordered by last_seen desc.
+         * @description Paginated finding_state rows. Filters: severity, state. Ordered by last_seen desc.
          */
         get: operations["list_findings_api_findings_get"];
         put?: never;
@@ -96,6 +96,26 @@ export interface paths {
          * @description Return workload counts per CVE aggregated from the latest snapshot date.
          */
         get: operations["get_workload_counts_api_workload_counts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workloads-for-cve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workloads For Cve
+         * @description Return distinct workloads running images that contain the given CVE (OPEN state only).
+         */
+        get: operations["get_workloads_for_cve_api_workloads_for_cve_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -159,12 +179,6 @@ export interface components {
             state: string;
             /** Reason Code */
             reason_code: string | null;
-            /** In Use */
-            in_use: boolean;
-            /** Fix Available */
-            fix_available: boolean;
-            /** Public Exploit */
-            public_exploit: boolean;
         };
         /** FindingsResponse */
         FindingsResponse: {
@@ -291,6 +305,30 @@ export interface components {
             /** Snapshot Date */
             snapshot_date: string;
         };
+        /** WorkloadRow */
+        WorkloadRow: {
+            /** Cluster Name */
+            cluster_name: string;
+            /** Namespace Name */
+            namespace_name: string;
+            /** Workload Type */
+            workload_type: string;
+            /** Workload Name */
+            workload_name: string;
+            /** Container Name */
+            container_name: string;
+            /** Team Id */
+            team_id: string | null;
+        };
+        /** WorkloadsForCveResponse */
+        WorkloadsForCveResponse: {
+            /** Cve Id */
+            cve_id: string;
+            /** Workloads */
+            workloads: components["schemas"]["WorkloadRow"][];
+            /** Total */
+            total: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -393,9 +431,6 @@ export interface operations {
             query?: {
                 severity?: string | null;
                 state?: string | null;
-                fix_available?: boolean | null;
-                in_use?: boolean | null;
-                public_exploit?: boolean | null;
                 limit?: number;
                 offset?: number;
             };
@@ -441,6 +476,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkloadCountsResponse"];
+                };
+            };
+        };
+    };
+    get_workloads_for_cve_api_workloads_for_cve_get: {
+        parameters: {
+            query: {
+                /** @description CVE ID to look up */
+                cve_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkloadsForCveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

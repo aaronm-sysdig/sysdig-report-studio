@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { AppShell } from "@/components/app-shell/AppShell";
 import { FleetCriticalTrend } from "@/components/widgets/FleetCriticalTrend";
 import { FleetSeveritySnapshot } from "@/components/widgets/FleetSeveritySnapshot";
@@ -52,7 +53,9 @@ export default function DashboardPage() {
 
         {/* Row 6 — findings table full width */}
         <div style={{ gridColumn: "span 12" }}>
-          <FindingsTable />
+          <Suspense fallback={null}>
+            <FindingsTable />
+          </Suspense>
         </div>
       </div>
     </AppShell>

@@ -27,6 +27,7 @@ export const CHART_COLORS = {
   severityNegligible: "#b5c4cc",
   fixedGreen: "#4ADE80",
   falcoBlue: "#00CBE2",
+  darkRed: "#780606"
 } as const;
 
 /**
@@ -69,7 +70,7 @@ export const STANDARD_Y_AXIS = {
   type: "value" as const,
   minInterval: 1,
   axisLabel: {
-    fontSize: 10,
+    fontSize: 12,
     color: CHART_COLORS.greyMuted,
     formatter: (v: number) =>
       v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v),
@@ -101,7 +102,7 @@ export function standardXAxis(dates: string[], showLabels: boolean) {
       show: showLabels,
       interval: labelInterval,
       rotate: n > 7 ? 45 : 0,
-      fontSize: 10,
+      fontSize: 12,
       color: CHART_COLORS.greyMuted,
     },
     axisLine: { lineStyle: { color: CHART_COLORS.greyBorder } },
@@ -115,8 +116,66 @@ export function standardXAxis(dates: string[], showLabels: boolean) {
 export const STANDARD_TOOLTIP_STYLE = {
   backgroundColor: CHART_COLORS.white,
   borderColor: CHART_COLORS.greyBorder,
-  textStyle: { color: CHART_COLORS.black, fontSize: 11 },
+  textStyle: { color: CHART_COLORS.black, fontSize: 12 },
 };
+
+/**
+ * Severity ordering for tooltip rows — Critical first, Low last.
+ * Used to sort tooltip entries so the most severe findings appear at the top.
+ */
+export const SEVERITY_ORDER: Record<string, number> = {
+  Critical: 0,
+  High: 1,
+  Medium: 2,
+  Low: 3,
+  Negligible: 4,
+};
+
+/**
+ * Build a tooltip formatter for severity-stacked charts.
+ *
+ * Automatically sorts rows by severity (Critical → Low) and excludes the
+ * "Total" line series from the detail rows (shows it as a summary footer).
+ *
+ * Usage:
+ *   tooltip: {
+ *     trigger: "axis",
+ *     ...STANDARD_TOOLTIP_STYLE,
+ *     formatter: severityTooltipFormatter(),
+ *   },
+ */
+export function severityTooltipFormatter() {
+  return (params: unknown[]) => {
+    const arr = params as Array<{
+      axisValue: string;
+      seriesName: string;
+      value: number;
+      color: string;
+    }>;
+    if (!arr.length) return "";
+    const date = arr[0].axisValue;
+    const rows = arr
+      .filter((p) => p.seriesName !== "Total")
+      .sort((a, b) => (SEVERITY_ORDER[a.seriesName] ?? 99) - (SEVERITY_ORDER[b.seriesName] ?? 99))
+      .map(
+        (p) =>
+          `<div style="display:flex;justify-content:space-between;gap:12px">` +
+          `<span style="color:${p.color}">&#9632;</span>` +
+          `<span style="color:${CHART_COLORS.greyMuted};flex:1;margin-left:4px">${p.seriesName}:</span>` +
+          `<b>${(p.value ?? 0).toLocaleString("en-GB")}</b></div>`,
+      );
+    const totalEntry = arr.find((p) => p.seriesName === "Total");
+    const total = totalEntry ? totalEntry.value : 0;
+    return `<div style="font-size:11px;min-width:160px">
+      <div style="color:${CHART_COLORS.greyMuted};margin-bottom:4px">${date}</div>
+      ${rows.join("")}
+      <div style="border-top:1px solid ${CHART_COLORS.greyBorder};margin-top:4px;padding-top:4px;display:flex;justify-content:space-between">
+        <span style="color:${CHART_COLORS.greyMuted}">Total:</span>
+        <b>${total.toLocaleString("en-GB")}</b>
+      </div>
+    </div>`;
+  };
+}
 
 /**
  * Standard grid (padding around the chart plot).
