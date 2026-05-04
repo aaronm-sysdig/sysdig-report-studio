@@ -1327,15 +1327,17 @@ export function FindingsTable() {
   // Client-side text search filter on top of server page
   // ---------------------------------------------------------------------------
   const filteredRows = useMemo(() => {
-    if (!globalFilter.trim()) return rows;
-    const q = globalFilter.toLowerCase();
+    // Use drill filter value if active, otherwise use manual search
+    const searchValue = (isFiltered && filter.mode !== "workload_drill") ? filter.value : globalFilter;
+    if (!searchValue?.trim()) return rows;
+    const q = searchValue.toLowerCase();
     return rows.filter(
       (r) =>
         r.cve_id.toLowerCase().includes(q) ||
         (r.image_name ?? "").toLowerCase().includes(q) ||
         r.package_name.toLowerCase().includes(q)
     );
-  }, [rows, globalFilter]);
+  }, [rows, globalFilter, isFiltered, filter.value, filter.mode]);
 
   // ---------------------------------------------------------------------------
   // Aggregated rows — derived from filteredRows based on groupBy
@@ -1476,18 +1478,28 @@ export function FindingsTable() {
     // Filter by severity gate, sort by score descending
     const filtered = scored
       .filter(r => weights.severityGate.includes(r.severity))
-      .toSorted((a, b) => b.score - a.score);
+
+    // Apply drill filter if active (e.g. clicked a CVE to narrow down)
+    const drilled = isFiltered && filter.mode !== "workload_drill" && filter.field === "cve"
+      ? filtered.filter(r => r.cve_id === filter.value)
+      : filtered;
+
+    const sorted = drilled.toSorted((a, b) => b.score - a.score);
 
     // Client-side pagination
     const start = serverPage * limit;
-    return filtered.slice(start, start + limit);
-  }, [weightedCves, groupBy, weights, serverPage, limit]);
+    return sorted.slice(start, start + limit);
+  }, [weightedCves, groupBy, weights, serverPage, limit, isFiltered, filter.value, filter.field, filter.mode]);
 
-  // Total count after severity gate (for pagination footer)
+  // Total count after severity gate and drill filter (for pagination footer)
   const weightedTotal = useMemo(() => {
     if (groupBy !== "weighted") return 0;
-    return weightedCves.filter(c => weights.severityGate.includes(c.severity)).length;
-  }, [weightedCves, groupBy, weights]);
+    let total = weightedCves.filter(c => weights.severityGate.includes(c.severity)).length;
+    if (isFiltered && filter.mode !== "workload_drill" && filter.field === "cve") {
+      total = weightedCves.filter(c => c.cve_id === filter.value).length;
+    }
+    return total;
+  }, [weightedCves, groupBy, weights, isFiltered, filter.value, filter.field, filter.mode]);
 
   // ---------------------------------------------------------------------------
   // Dynamic column overrides — wrap drillable cells
@@ -1568,15 +1580,13 @@ export function FindingsTable() {
       if (accessorKey === "workload_count") {
         return {
           ...col,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          cell: (info: any) => (
+          cell: (info: { getValue: () => unknown; row: { original: WeightedRow } }) => (
             <span
               className="text-[11px] font-semibold cursor-pointer underline decoration-dotted underline-offset-2"
               title="Click to see workloads running this CVE"
               onClick={(e) => {
                 e.stopPropagation();
-                const row = info.getRow();
-                const cveId = row.getValue("cve_id") as string;
+                const cveId = info.row.original.cve_id;
                 applyFilter("cve", cveId, "workload_drill");
               }}
               style={{ color: "var(--fg-primary)" }}
@@ -1643,7 +1653,7 @@ export function FindingsTable() {
     // Toolbar
     const toolbar = (
       <div className="flex flex-col gap-2">
-        {/* Filter chips */}
+        {/* Filter chips row */}
         <FilterChips
           filter={filter}
           onClear={clearFilter}
@@ -1915,7 +1925,11 @@ export function FindingsTable() {
     const weightedFirstRow = serverPage * limit + 1;
     const weightedLastRow = Math.min((serverPage + 1) * limit, weightedTotal);
 
-    const paginationFooter = groupBy === "none" ? (
+    const paginationFooter = filter.mode === "workload_drill" ? (
+      <p className="text-[10px] pt-1" style={{ color: "var(--fg-muted)" }}>
+        {workloadRows.length.toLocaleString("en-GB")} workloads running images affected by {filter.value}
+      </p>
+    ) : groupBy === "none" ? (
       <div className="flex items-center justify-between pt-1">
         <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
           {total === 0
@@ -2004,8 +2018,39 @@ export function FindingsTable() {
     );
   }
 
+  // Reset button — always visible, outside loading/error conditional
+  const resetButton = (
+    <button
+      onClick={() => {
+        clearFilter();
+        setGlobalFilter("");
+        setSeverityFilter("All");
+        setStateFilter("OPEN");
+        setFixFilter(false);
+        setInUseFilter(false);
+        setExploitFilter(false);
+        setGroupBy("none");
+        setServerPage(0);
+      }}
+      className="text-[11px] px-2 py-0.5 rounded"
+      style={{
+        border: "1px solid var(--border-subtle)",
+        background: "var(--bg-surface)",
+        color: "var(--fg-muted)",
+        cursor: "pointer",
+      }}
+      title="Reset all filters and group-by to defaults"
+    >
+      Reset
+    </button>
+  );
+
   return (
     <WidgetCard label="All Findings" title="Findings list">
+      <div className="flex items-center justify-between mb-2">
+        <div /> {/* spacer for alignment */}
+        {resetButton}
+      </div>
       {body}
     </WidgetCard>
   );
