@@ -92,3 +92,27 @@ export type WeightedCve = components["schemas"]["WeightedCve"];
 export async function getWorkloadCounts(): Promise<WorkloadCountsResponse> {
   return apiFetch<WorkloadCountsResponse>("/api/workload-counts");
 }
+
+export interface WorkloadRow {
+  cluster_name: string;
+  namespace_name: string;
+  workload_type: string;
+  workload_name: string;
+  container_name: string;
+  team_id: string | null;
+}
+
+export interface WorkloadsForCveResponse {
+  cve_id: string;
+  workloads: WorkloadRow[];
+  total: number;
+}
+
+/**
+ * GET /api/workloads-for-cve — workloads running images affected by a CVE.
+ */
+export async function getWorkloadsForCve(cveId: string): Promise<WorkloadsForCveResponse> {
+  return apiFetch<WorkloadsForCveResponse>(
+    `/api/workloads-for-cve?cve_id=${encodeURIComponent(cveId)}`
+  );
+}
