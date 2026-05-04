@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -12,11 +12,13 @@ import {
 } from "@tanstack/react-table";
 import { WidgetCard } from "./WidgetCard";
 import { Input } from "@/components/ui/input";
-import { getFindings, getWorkloadCounts } from "@/lib/api/client";
+import { getFindings, getWorkloadCounts, getWorkloadsForCve } from "@/lib/api/client";
 import type { FindingsResponse, WeightedCve } from "@/lib/api/client";
 import { CHART_COLORS } from "@/lib/charts/defaults";
 import { TABLE_DEFAULTS } from "@/lib/table.defaults";
 import { loadWeights, saveWeights, DEFAULT_WEIGHTS, type WeightConfig } from "@/lib/weighted-weights";
+import { useDrillFilter, DRILL_COLUMNS } from "@/lib/drill";
+import { FilterChips } from "@/components/ui/FilterChips";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +78,15 @@ interface WeightedRow {
   public_exploit: boolean;
   score: number;
   breakdown: string;
+}
+
+interface WorkloadDetailRow {
+  cluster_name: string;
+  namespace_name: string;
+  workload_type: string;
+  workload_name: string;
+  container_name: string;
+  team_id: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +724,97 @@ const WEIGHTED_COLUMNS: ColumnDef<WeightedRow>[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Column definitions — Workload detail (drill-in)
+// ---------------------------------------------------------------------------
+const WORKLOAD_DETAIL_COLUMNS: ColumnDef<WorkloadDetailRow>[] = [
+  {
+    accessorKey: "cluster_name",
+    header: "Cluster",
+    size: 160,
+    minSize: 100,
+    cell: (info) => (
+      <span
+        className="font-mono text-[11px] truncate block"
+        title={String(info.getValue())}
+        style={{ color: "var(--fg-primary)" }}
+      >
+        {String(info.getValue())}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "namespace_name",
+    header: "Namespace",
+    size: 130,
+    minSize: 80,
+    cell: (info) => (
+      <span
+        className="font-mono text-[11px] truncate block"
+        title={String(info.getValue())}
+        style={{ color: "var(--fg-muted)" }}
+      >
+        {String(info.getValue())}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "workload_name",
+    header: "Workload",
+    size: 160,
+    minSize: 100,
+    cell: (info) => (
+      <span
+        className="font-mono text-[11px] truncate block"
+        title={String(info.getValue())}
+        style={{ color: "var(--fg-primary)" }}
+      >
+        {String(info.getValue())}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "workload_type",
+    header: "Type",
+    size: 110,
+    minSize: 70,
+    cell: (info) => (
+      <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
+        {String(info.getValue())}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "container_name",
+    header: "Container",
+    size: 130,
+    minSize: 80,
+    cell: (info) => (
+      <span
+        className="font-mono text-[11px] truncate block"
+        title={String(info.getValue())}
+        style={{ color: "var(--fg-muted)" }}
+      >
+        {String(info.getValue())}
+      </span>
+    ),
+  },
+  {
+    accessorKey: "team_id",
+    header: "Team",
+    size: 110,
+    minSize: 70,
+    cell: (info) => {
+      const val = info.getValue() as string | null;
+      return (
+        <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
+          {val ?? "—"}
+        </span>
+      );
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
 function TableSkeleton() {
@@ -914,6 +1016,40 @@ function ResizableTable<T extends object>({
 }
 
 // ---------------------------------------------------------------------------
+// Drillable cell wrapper
+// ---------------------------------------------------------------------------
+function DrillableCell({
+  accessorKey,
+  value,
+  children,
+  onDrill,
+}: {
+  accessorKey: string;
+  value: string | number;
+  children: React.ReactNode;
+  onDrill: (accessorKey: string, value: string) => void;
+}) {
+  const config = DRILL_COLUMNS[accessorKey];
+  if (!config) {
+    return <>{children}</>;
+  }
+
+  return (
+    <span
+      className="cursor-pointer underline decoration-dotted underline-offset-2"
+      style={{ color: "var(--fg-primary)" }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onDrill(accessorKey, String(value));
+      }}
+      title={`Filter by ${config.field}: ${value}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Weight configuration panel
 // ---------------------------------------------------------------------------
 function WeightConfigPanel({
@@ -1050,6 +1186,14 @@ export function FindingsTable() {
   const [snapshotDate, setSnapshotDate] = useState<string>("");
   const [weightsLoading, setWeightsLoading] = useState(false);
 
+  // Drill filter state (URL-driven)
+  const { filter, applyFilter, setMode, clearFilter, isFiltered } = useDrillFilter();
+
+  // Workload drill data
+  const [workloadRows, setWorkloadRows] = useState<WorkloadDetailRow[]>([]);
+  const [workloadLoading, setWorkloadLoading] = useState(false);
+  const [workloadError, setWorkloadError] = useState<string | null>(null);
+
   // Load weights from localStorage on mount
   useEffect(() => {
     setWeights(loadWeights());
@@ -1072,6 +1216,31 @@ export function FindingsTable() {
       .catch((e) => console.error("Failed to load workload counts:", e))
       .finally(() => setWeightsLoading(false));
   }, [groupBy]);
+
+  // Fetch workload details when in workload_drill mode
+  useEffect(() => {
+    if (filter.mode !== "workload_drill" || !filter.value) {
+      setWorkloadRows([]);
+      return;
+    }
+    setWorkloadLoading(true);
+    setWorkloadError(null);
+    getWorkloadsForCve(filter.value)
+      .then((data) => {
+        setWorkloadRows(data.workloads);
+      })
+      .catch((e: unknown) => {
+        setWorkloadError(e instanceof Error ? e.message : "Failed to load workloads");
+      })
+      .finally(() => setWorkloadLoading(false));
+  }, [filter.mode, filter.value]);
+
+  // Reset page when drill filter changes
+  useEffect(() => {
+    if (isFiltered) {
+      setServerPage(0);
+    }
+  }, [isFiltered, filter.field, filter.value]);
 
   // ---------------------------------------------------------------------------
   // Fetch
@@ -1136,6 +1305,23 @@ export function FindingsTable() {
     setLimit(Number(v) as LimitOption);
     setServerPage(0);
   };
+
+  // Drill-in cell click handler
+  const handleCellDrill = useCallback(
+    (accessorKey: string, value: string) => {
+      const config = DRILL_COLUMNS[accessorKey];
+      if (!config) return;
+
+      if (config.mode === "workload_drill") {
+        // Handled specially in weighted columns
+        return;
+      }
+
+      setGlobalFilter("");
+      applyFilter(config.field, value);
+    },
+    [applyFilter]
+  );
 
   // ---------------------------------------------------------------------------
   // Client-side text search filter on top of server page
@@ -1304,12 +1490,114 @@ export function FindingsTable() {
   }, [weightedCves, groupBy, weights]);
 
   // ---------------------------------------------------------------------------
+  // Dynamic column overrides — wrap drillable cells
+  // ---------------------------------------------------------------------------
+  const flatColumns = useMemo((): ColumnDef<FindingRow>[] => {
+    return FLAT_COLUMNS.map((col) => {
+      const accessorKey = (col as { accessorKey?: string }).accessorKey;
+
+      // image_name is nullable, handle specially
+      if (accessorKey === "image_name") {
+        return {
+          ...col,
+          cell: (info: { getValue: () => unknown }) => {
+            const val = info.getValue() as string | null;
+            if (!val) {
+              return (
+                <span className="font-mono text-[11px] truncate block" style={{ color: "var(--fg-muted)" }}>
+                  —
+                </span>
+              );
+            }
+            return (
+              <DrillableCell accessorKey={accessorKey} value={val} onDrill={handleCellDrill}>
+                <span
+                  className="font-mono text-[11px] truncate block"
+                  title={val}
+                  style={{ color: "var(--fg-primary)" }}
+                >
+                  {val}
+                </span>
+              </DrillableCell>
+            );
+          },
+        };
+      }
+
+      // For cve_id and package_name
+      if (accessorKey === "cve_id" || accessorKey === "package_name") {
+        const originalCell = (col as { cell?: (info: { getValue: () => unknown }) => React.ReactNode }).cell;
+        return {
+          ...col,
+          cell: (info: { getValue: () => unknown }) => (
+            <DrillableCell accessorKey={accessorKey} value={String(info.getValue())} onDrill={handleCellDrill}>
+              {originalCell ? originalCell(info) : String(info.getValue())}
+            </DrillableCell>
+          ),
+        };
+      }
+
+      return col;
+    });
+  }, [handleCellDrill]);
+
+  const weightedColumns = useMemo((): ColumnDef<WeightedRow>[] => {
+    return WEIGHTED_COLUMNS.map((col) => {
+      const accessorKey = (col as { accessorKey?: string }).accessorKey;
+
+      if (accessorKey === "cve_id") {
+        return {
+          ...col,
+          cell: (info: { getValue: () => unknown }) => (
+            <span
+              className="font-mono text-[12px] truncate block cursor-pointer underline decoration-dotted underline-offset-2"
+              title="Click to filter by this CVE"
+              onClick={(e) => {
+                e.stopPropagation();
+                setGlobalFilter("");
+                applyFilter("cve", String(info.getValue()));
+              }}
+              style={{ color: "var(--fg-primary)" }}
+            >
+              {String(info.getValue())}
+            </span>
+          ),
+        };
+      }
+
+      if (accessorKey === "workload_count") {
+        return {
+          ...col,
+          cell: (info: any) => (
+            <span
+              className="text-[11px] font-semibold cursor-pointer underline decoration-dotted underline-offset-2"
+              title="Click to see workloads running this CVE"
+              onClick={(e) => {
+                e.stopPropagation();
+                const row = info.getRow();
+                const cveId = row.getValue("cve_id") as string;
+                applyFilter("cve", cveId);
+                setMode("workload_drill");
+              }}
+              style={{ color: "var(--fg-primary)" }}
+            >
+              {(info.getValue() as number).toLocaleString("en-GB")} ▸
+            </span>
+          ),
+        };
+      }
+
+      return col;
+    });
+  }, [applyFilter, setMode]);
+
+  // ---------------------------------------------------------------------------
   // Flat-list TanStack table (used only when groupBy === "none")
   // ---------------------------------------------------------------------------
   const flatTable = useReactTable({
     ...TABLE_DEFAULTS,
     data: filteredRows,
-    columns: FLAT_COLUMNS,
+    columns: flatColumns,
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
@@ -1354,11 +1642,24 @@ export function FindingsTable() {
   } else {
     // Toolbar
     const toolbar = (
-      <div className="flex flex-wrap gap-2 items-center">
+      <div className="flex flex-col gap-2">
+        {/* Filter chips */}
+        <FilterChips
+          filter={filter}
+          onClear={clearFilter}
+          onModeReset={filter.mode === "workload_drill" ? () => setMode("findings") : undefined}
+        />
+        <div className="flex flex-wrap gap-2 items-center">
         <Input
           placeholder="Search CVE, image, package…"
-          value={globalFilter}
-          onChange={(e) => setGlobalFilter(e.target.value)}
+          value={isFiltered && filter.mode !== "workload_drill" ? filter.value ?? globalFilter : globalFilter}
+          onChange={(e) => {
+            // Typing clears any active drill filter
+            if (isFiltered) {
+              clearFilter();
+            }
+            setGlobalFilter(e.target.value);
+          }}
           className="text-[12px] max-w-[240px]"
         />
         <FilterSelect
@@ -1420,8 +1721,9 @@ export function FindingsTable() {
             ))}
           </select>
         </div>
-        {/* Weight config panel — shows when weighted mode is active */}
-        {groupBy === "weighted" && (
+        </div>
+        {/* Weight config panel — shows when weighted mode is active AND not in drill mode */}
+        {groupBy === "weighted" && filter.mode !== "workload_drill" && (
           <div className="w-full mt-2">
             <WeightConfigPanel
               config={weights}
@@ -1436,9 +1738,32 @@ export function FindingsTable() {
       </div>
     );
 
-    // Table area — switches based on groupBy
+    // Table area — switches based on drill mode and groupBy
     let tableArea: React.ReactNode;
-    if (groupBy === "weighted") {
+
+    if (filter.mode === "workload_drill") {
+      // Workload detail view
+      tableArea = (
+        <div style={{ overflowX: "auto" }}>
+          {workloadLoading ? (
+            <div className="text-center text-[12px] py-6 animate-pulse" style={{ color: "var(--fg-muted)" }}>
+              Loading workloads…
+            </div>
+          ) : workloadError ? (
+            <div className="text-center text-[12px] py-6" style={{ color: "var(--severity-critical)" }}>
+              {workloadError}
+            </div>
+          ) : (
+            <ResizableTable
+              data={workloadRows}
+              columns={WORKLOAD_DETAIL_COLUMNS}
+              emptyMessage={`No workloads found running images affected by ${filter.value}`}
+              colSpan={WORKLOAD_DETAIL_COLUMNS.length}
+            />
+          )}
+        </div>
+      );
+    } else if (groupBy === "weighted") {
       tableArea = (
         <div style={{ overflowX: "auto" }}>
           {weightsLoading ? (
@@ -1449,9 +1774,9 @@ export function FindingsTable() {
             <>
               <ResizableTable
                 data={weightedRows}
-                columns={WEIGHTED_COLUMNS}
+                columns={weightedColumns}
                 emptyMessage="No findings match your severity gate, or no workload data available."
-                colSpan={WEIGHTED_COLUMNS.length}
+                colSpan={weightedColumns.length}
               />
               {snapshotDate && (
                 <p className="text-[10px] mt-1" style={{ color: "var(--fg-muted)" }}>
