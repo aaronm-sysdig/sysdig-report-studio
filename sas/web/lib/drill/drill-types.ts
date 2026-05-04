@@ -15,8 +15,8 @@ export interface DrillFilter {
 export interface UseDrillFilterReturn {
   /** Current filter state derived from URL params. */
   filter: DrillFilter;
-  /** Apply a filter by field and value (updates URL, pushes history). */
-  applyFilter: (field: DrillField, value: string) => void;
+  /** Apply a filter by field and value (updates URL, pushes history). Optional mode sets display mode atomically. */
+  applyFilter: (field: DrillField, value: string, mode?: DrillMode) => void;
   /** Switch display mode (e.g. workload_drill). */
   setMode: (mode: DrillMode) => void;
   /** Clear all drill params (restores default view). */

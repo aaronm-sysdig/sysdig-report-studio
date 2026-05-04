@@ -28,7 +28,7 @@ export function useDrillFilter(): UseDrillFilterReturn {
 
   const isFiltered = !!filter.field && !!filter.value;
 
-  const applyFilter = (field: DrillField, value: string) => {
+  const applyFilter = (field: DrillField, value: string, mode?: DrillMode) => {
     const params = new URLSearchParams(searchParams.toString());
     // Clear any existing drill fields
     for (const f of DRILL_FIELDS) {
@@ -37,6 +37,10 @@ export function useDrillFilter(): UseDrillFilterReturn {
     params.delete("mode"); // reset mode
     // Set new filter
     params.set(field, value);
+    // Atomically set mode if provided (avoids two router.push() calls)
+    if (mode && mode !== "findings") {
+      params.set("mode", mode);
+    }
     router.push(`${pathname}?${params.toString()}`, { scroll: false });
   };
 

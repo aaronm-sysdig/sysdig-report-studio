@@ -53,7 +53,7 @@ export default function DashboardPage() {
 
         {/* Row 6 — findings table full width */}
         <div style={{ gridColumn: "span 12" }}>
-          <Suspense fallback={null}>
+          <Suspense fallback={<div className="animate-pulse" style={{ minHeight: "200px" }} />}>
             <FindingsTable />
           </Suspense>
         </div>

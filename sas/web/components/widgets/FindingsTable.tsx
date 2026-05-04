@@ -1568,6 +1568,7 @@ export function FindingsTable() {
       if (accessorKey === "workload_count") {
         return {
           ...col,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           cell: (info: any) => (
             <span
               className="text-[11px] font-semibold cursor-pointer underline decoration-dotted underline-offset-2"
@@ -1576,8 +1577,7 @@ export function FindingsTable() {
                 e.stopPropagation();
                 const row = info.getRow();
                 const cveId = row.getValue("cve_id") as string;
-                applyFilter("cve", cveId);
-                setMode("workload_drill");
+                applyFilter("cve", cveId, "workload_drill");
               }}
               style={{ color: "var(--fg-primary)" }}
             >
