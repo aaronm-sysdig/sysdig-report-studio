@@ -13,6 +13,7 @@ import {
   standardXAxis,
   STANDARD_Y_AXIS,
   STANDARD_TOOLTIP_STYLE,
+  severityTooltipFormatter,
 } from "@/lib/charts/defaults";
 
 // ECharts must be loaded client-side only
@@ -61,6 +62,7 @@ interface HeadlineMetrics {
   totalFixed: number;
   totalRegressed: number;
   deltaVs7Days: number | null;
+  windowDays: number;
 }
 
 interface ReasonTotals {
@@ -313,35 +315,7 @@ function buildMainChartOption(
     tooltip: {
       trigger: "axis",
       ...STANDARD_TOOLTIP_STYLE,
-      formatter: (params: unknown[]) => {
-        const arr = params as Array<{
-          axisValue: string;
-          seriesName: string;
-          value: number;
-          color: string;
-        }>;
-        if (!arr.length) return "";
-        const date = arr[0].axisValue;
-        const rows = arr
-          .filter((p) => p.seriesName !== "Total")
-          .map(
-            (p) =>
-              `<div style="display:flex;justify-content:space-between;gap:12px">` +
-              `<span style="color:${p.color}">&#9632;</span>` +
-              `<span style="color:${CHART_COLORS.greyMuted};flex:1;margin-left:4px">${p.seriesName}:</span>` +
-              `<b>${(p.value ?? 0).toLocaleString("en-GB")}</b></div>`,
-          );
-        const totalEntry = arr.find((p) => p.seriesName === "Total");
-        const total = totalEntry ? totalEntry.value : 0;
-        return `<div style="font-size:11px;min-width:160px">
-          <div style="color:${CHART_COLORS.greyMuted};margin-bottom:4px">${date}</div>
-          ${rows.join("")}
-          <div style="border-top:1px solid ${CHART_COLORS.greyBorder};margin-top:4px;padding-top:4px;display:flex;justify-content:space-between">
-            <span style="color:${CHART_COLORS.greyMuted}">Total:</span>
-            <b>${total.toLocaleString("en-GB")}</b>
-          </div>
-        </div>`;
-      },
+      formatter: severityTooltipFormatter(),
     },
   };
 }
@@ -506,10 +480,11 @@ function buildNarrative(
   latestTag: string | null,
   reason?: ReasonTotals,
 ): string {
-  const { totalNew, totalFixed, totalRegressed } = metrics;
+  const { totalNew, totalFixed, totalRegressed, windowDays } = metrics;
+  const windowLabel = `${windowDays}-day`;
 
   if (totalNew === 0 && totalFixed === 0 && totalRegressed === 0) {
-    return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — no new findings, closures, or regressions recorded in the last 90 days.`;
+    return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — no new findings, closures, or regressions recorded in the last ${windowLabel} window.`;
   }
 
   if (totalRegressed > totalFixed && totalFixed < 2) {
@@ -522,7 +497,7 @@ function buildNarrative(
 
     if (totalClosed > 0) {
       if (patched > retired + accepted + reason.other) {
-        return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — in the last 90 days ${patched.toLocaleString("en-GB")} findings were patched (real fixes)${retired > 0 ? `, ${retired.toLocaleString("en-GB")} retired` : ""}${latestTag ? ` with \`${latestTag}\` as the most recent tag` : ""}.`;
+        return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — in the last ${windowLabel} window ${patched.toLocaleString("en-GB")} findings were patched (real fixes)${retired > 0 ? `, ${retired.toLocaleString("en-GB")} retired` : ""}${latestTag ? ` with \`${latestTag}\` as the most recent tag` : ""}.`;
       }
 
       if (retired > patched) {
@@ -538,14 +513,14 @@ function buildNarrative(
   const netImprovement = totalFixed - totalNew;
 
   if (netImprovement > 0 && totalFixed > 2) {
-    return `The \`${repoName}\` repository (${tagCount} tag${tagCount !== 1 ? "s" : ""}) has been improving — ${totalFixed.toLocaleString("en-GB")} findings closed${totalRegressed > 0 ? `, ${totalRegressed.toLocaleString("en-GB")} regressed` : ", no regressions"} in the last 90 days.`;
+    return `The \`${repoName}\` repository (${tagCount} tag${tagCount !== 1 ? "s" : ""}) has been improving — ${totalFixed.toLocaleString("en-GB")} findings closed${totalRegressed > 0 ? `, ${totalRegressed.toLocaleString("en-GB")} regressed` : ", no regressions"} in the last ${windowLabel} window.`;
   }
 
   if (totalNew > totalFixed && totalNew > 5) {
-    return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${totalNew.toLocaleString("en-GB")} new findings appeared whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed in the last 90 days. The backlog is growing.`;
+    return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${totalNew.toLocaleString("en-GB")} new findings appeared whilst only ${totalFixed.toLocaleString("en-GB")} ${totalFixed !== 1 ? "were" : "was"} closed in the last ${windowLabel} window. The backlog is growing.`;
   }
 
-  return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${totalNew.toLocaleString("en-GB")} new, ${totalFixed.toLocaleString("en-GB")} fixed, and ${totalRegressed.toLocaleString("en-GB")} regressed across all tags in the last 90 days.`;
+  return `The \`${repoName}\` repository spans ${tagCount} tag${tagCount !== 1 ? "s" : ""} — ${totalNew.toLocaleString("en-GB")} new, ${totalFixed.toLocaleString("en-GB")} fixed, and ${totalRegressed.toLocaleString("en-GB")} regressed across all tags in the last ${windowLabel} window.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -984,7 +959,7 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
             deltaVs7Days = currentOpen - sevenDaysAgo;
           }
 
-          setMetrics({ currentOpen, totalNew, totalFixed, totalRegressed, deltaVs7Days });
+          setMetrics({ currentOpen, totalNew, totalFixed, totalRegressed, deltaVs7Days, windowDays: slicedDates.length });
 
           const sumSeries = (r: QueryResult) => {
             const s = r.series[0];
@@ -1192,17 +1167,17 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
                 }
               />
               <StatCard
-                label="90-Day New"
+                label={`${metrics?.windowDays ?? 90}-Day New`}
                 value={metrics?.totalNew ?? 0}
                 delta={null}
               />
               <StatCard
-                label="90-Day Fixed"
+                label={`${metrics?.windowDays ?? 90}-Day Fixed`}
                 value={metrics?.totalFixed ?? 0}
                 delta={null}
               />
               <StatCard
-                label="90-Day Regressed"
+                label={`${metrics?.windowDays ?? 90}-Day Regressed`}
                 value={metrics?.totalRegressed ?? 0}
                 delta={null}
               />

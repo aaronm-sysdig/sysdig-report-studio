@@ -10,10 +10,10 @@ import {
   flexRender,
   type ColumnDef,
   type SortingState,
-  type ColumnResizeMode,
 } from "@tanstack/react-table";
 import { WidgetCard } from "./WidgetCard";
 import { Input } from "@/components/ui/input";
+import { TABLE_DEFAULTS } from "@/lib/table.defaults";
 import { runQuery, getEntities } from "@/lib/api/client";
 import type { QueryIn } from "@/lib/api/client";
 import { CHART_COLORS } from "@/lib/charts/defaults";
@@ -250,9 +250,8 @@ export function ImageInventoryGrid() {
     return () => { cancelled = true; };
   }, []);
 
-  const columnResizeMode: ColumnResizeMode = "onChange";
-
   const table = useReactTable({
+    ...TABLE_DEFAULTS,
     data,
     columns: COLUMNS,
     state: {
@@ -266,8 +265,6 @@ export function ImageInventoryGrid() {
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    enableColumnResizing: true,
-    columnResizeMode,
     // Allow manual pagination control
     manualPagination: false,
   });

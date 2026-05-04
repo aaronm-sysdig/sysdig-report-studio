@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { AppShell } from "@/components/app-shell/AppShell";
 import { FleetCriticalTrend } from "@/components/widgets/FleetCriticalTrend";
+import { FleetRemediationStory } from "@/components/widgets/FleetRemediationStory";
 import { FleetSeveritySnapshot } from "@/components/widgets/FleetSeveritySnapshot";
 import { FindingsTable } from "@/components/widgets/FindingsTable";
 import { ImageInventoryGrid } from "@/components/widgets/ImageInventoryGrid";
@@ -25,12 +26,22 @@ export default function DashboardPage() {
           <FleetSeveritySnapshot />
         </div>
 
-        {/* Row 2 — flagship widget, full width */}
+        {/* Row 2 — fleet remediation story, full width */}
+        <div style={{ gridColumn: "span 12" }}>
+          <FleetRemediationStory />
+        </div>
+
+        {/* Row 3 — findings table, full width */}
+        <div style={{ gridColumn: "span 12" }}>
+          <FindingsTable />
+        </div>
+
+        {/* Row 4 — flagship widget, full width */}
         <div style={{ gridColumn: "span 12" }}>
           <ImageRemediationStory />
         </div>
 
-        {/* Row 3 — fleet metrics side by side */}
+        {/* Row 5 — fleet metrics side by side */}
         <div style={{ gridColumn: "span 6" }}>
           <FleetCriticalTrend />
         </div>
@@ -38,7 +49,7 @@ export default function DashboardPage() {
           <NewFixedRegressed />
         </div>
 
-        {/* Row 4 — exposure + repository hygiene */}
+        {/* Row 6 — exposure + repository hygiene */}
         <div style={{ gridColumn: "span 6" }}>
           <KevRansomwareExposure />
         </div>
@@ -46,12 +57,12 @@ export default function DashboardPage() {
           <RepositoryTagHygiene />
         </div>
 
-        {/* Row 5 — image inventory full width */}
+        {/* Row 7 — image inventory full width */}
         <div style={{ gridColumn: "span 12" }}>
           <ImageInventoryGrid />
         </div>
 
-        {/* Row 6 — findings table full width */}
+        {/* Row 8 — findings table full width */}
         <div style={{ gridColumn: "span 12" }}>
           <Suspense fallback={<div className="animate-pulse" style={{ minHeight: "200px" }} />}>
             <FindingsTable />

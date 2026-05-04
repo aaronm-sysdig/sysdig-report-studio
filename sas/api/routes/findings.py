@@ -19,6 +19,9 @@ class FindingRow(BaseModel):
     last_seen: str
     state: str
     reason_code: str | None
+    in_use: bool
+    fix_available: bool
+    public_exploit: bool
 
 
 class FindingsResponse(BaseModel):
@@ -34,11 +37,14 @@ ALLOWED_STATES = {"OPEN", "CLOSED"}
 def list_findings(
     severity: str | None = None,
     state: str | None = None,
+    fix_available: bool | None = None,
+    in_use: bool | None = None,
+    public_exploit: bool | None = None,
     limit: int = 100,
     offset: int = 0,
     conn=Depends(get_db),
 ) -> FindingsResponse:
-    """Paginated finding_state rows. Filters: severity, state. Ordered by last_seen desc."""
+    """Paginated finding_state rows. Filters: severity, state, fix_available, in_use, public_exploit. Ordered by last_seen desc."""
     if limit > 500:
         limit = 500  # safety cap
     if severity and severity not in ALLOWED_SEVERITIES:
@@ -54,6 +60,15 @@ def list_findings(
     if state:
         where.append("fs.state = ?")
         params.append(state)
+    if fix_available is not None:
+        where.append("fs.fix_available = ?")
+        params.append(1 if fix_available else 0)
+    if in_use is not None:
+        where.append("fs.in_use = ?")
+        params.append(1 if in_use else 0)
+    if public_exploit is not None:
+        where.append("fs.public_exploit = ?")
+        params.append(1 if public_exploit else 0)
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
@@ -68,7 +83,8 @@ def list_findings(
                fs.package_name,
                strftime(fs.first_seen, '%Y-%m-%dT%H:%M:%S+00:00') AS first_seen,
                strftime(fs.last_seen, '%Y-%m-%dT%H:%M:%S+00:00') AS last_seen,
-               fs.state, fs.reason_code
+               fs.state, fs.reason_code,
+               fs.in_use, fs.fix_available, fs.public_exploit
         FROM finding_state fs
         LEFT JOIN image i ON i.image_id = fs.image_id
         {where_sql}
@@ -83,6 +99,7 @@ def list_findings(
                 finding_id=r[0], cve_id=r[1], severity=r[2], image_id=r[3],
                 image_name=r[4], package_name=r[5], first_seen=r[6],
                 last_seen=r[7], state=r[8], reason_code=r[9],
+                in_use=bool(r[10]), fix_available=bool(r[11]), public_exploit=bool(r[12]),
             ) for r in rows
         ],
         total=total,
