@@ -16,11 +16,17 @@ Reason-code detection uses the graph snapshot taken THIS ingest:
 """
 from __future__ import annotations
 
+import sys
+import time
 from datetime import datetime, date
 
 import pandas as pd
 
 from sas.ingest.reason_code import ReasonContext, compute_reason_code
+
+
+def _dbg(msg: str) -> None:
+    print(f"[old-diff] {msg}", file=sys.stderr, flush=True)
 
 
 _DRIFT_COLUMNS = {
@@ -65,14 +71,21 @@ def diff_and_apply_findings(
 
     Returns counts: {"new": N, "reseen": N, "reopened": N, "closed": N}
     """
+    t0 = time.monotonic()
+    _ms = lambda: int((time.monotonic() - t0) * 1000)
     counts = {"new": 0, "reseen": 0, "reopened": 0, "closed": 0}
     today = snapshot_at.date()
     today_cve_ids = set(df["vulnerability_name"].unique())
 
     # Today's natural keys
+    _dbg(f"Building today_keys from {len(df):,} rows (iterrows)...")
+    t = time.monotonic()
     today_keys = {_natural_key(r): r for _, r in df.iterrows()}
+    _dbg(f"  ✓ {len(today_keys):,} unique natural keys in {int((time.monotonic()-t)*1000)}ms")
 
     # Current OPEN findings
+    _dbg(f"Fetching OPEN findings...")
+    t = time.monotonic()
     open_rows = conn.execute(
         """
         SELECT finding_id, image_id, cve_id, package_name, package_version,
@@ -90,9 +103,12 @@ def diff_and_apply_findings(
         }
         for r in open_rows
     }
+    _dbg(f"  ✓ {len(open_by_key):,} OPEN findings in {int((time.monotonic()-t)*1000)}ms")
 
     # 1. NEW + RESEEN + REOPENED
-    for key, r in today_keys.items():
+    _dbg(f"Processing {len(today_keys):,} today findings (per-row SQL)...")
+    t = time.monotonic()
+    for i, (key, r) in enumerate(today_keys.items()):
         v = _row_to_fs_values(r, snapshot_at)
         if key in open_by_key:
             # RESEEN — update last_seen, drift columns, days_open
@@ -141,8 +157,15 @@ def diff_and_apply_findings(
                     is_regression=False,
                 )
                 counts["new"] += 1
+        # Progress every 10k
+        if (i + 1) % 10000 == 0:
+            _dbg(f"  progress: {i+1:,}/{len(today_keys):,} in {_ms()}ms")
+    _dbg(f"  ✓ NEW/RESEEN/REOPENED done in {int((time.monotonic()-t)*1000)}ms — new={counts['new']}, reseen={counts['reseen']}, reopened={counts['reopened']}")
 
     # 2. DISAPPEARED — OPEN rows whose natural key wasn't in today
+    disapp_count = sum(1 for key in open_by_key if key not in today_keys)
+    _dbg(f"Processing {disapp_count:,} DISAPPEARED (per-row SQL with reason context)...")
+    t = time.monotonic()
     for key, prior in open_by_key.items():
         if key in today_keys:
             continue
@@ -163,6 +186,8 @@ def diff_and_apply_findings(
             [reason, snapshot_at, days_open, prior["finding_id"]],
         )
         counts["closed"] += 1
+    _dbg(f"  ✓ DISAPPEARED done in {int((time.monotonic()-t)*1000)}ms — closed={counts['closed']}")
+    _dbg(f"Total diff: {_ms()}ms")
 
     return counts
 
