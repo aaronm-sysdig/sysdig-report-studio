@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("csv", type=Path, help="Path to the Sysdig CSV export")
     parser.add_argument("--force", action="store_true",
                         help="Re-ingest even if snapshot_id already recorded")
+    parser.add_argument("--fast", action="store_true",
+                        help="Use DuckDB-native pipeline (no Pandas, ~10x faster)")
     args = parser.parse_args(argv)
 
     cfg = get_config()
@@ -34,10 +36,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         create_schema(conn)
         migrate_schema(conn)
-        result = run_pipeline(
-            conn=conn, csv_path=args.csv,
-            resolver=resolver, force=args.force,
-        )
+
+        if args.fast:
+            from sas.ingest.fast_pipeline import run_pipeline as fast_run_pipeline
+            result = fast_run_pipeline(
+                conn=conn, csv_path=args.csv,
+                resolver=resolver, force=args.force,
+            )
+        else:
+            result = run_pipeline(
+                conn=conn, csv_path=args.csv,
+                resolver=resolver, force=args.force,
+            )
     finally:
         conn.close()
 
