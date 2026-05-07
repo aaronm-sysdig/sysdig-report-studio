@@ -6,7 +6,8 @@ Counts by reason code follow the spec's categorization:
   - count_fixed_patched: CLOSED with reason_code=PATCHED
   - count_fixed_retired: CLOSED with reason_code IN (RETIRED, SCALED_TO_ZERO)
   - count_fixed_accepted: CLOSED with reason_code=ACCEPTED
-  - count_fixed_other:   CLOSED with reason_code IN (FEED_WITHDRAWN, UNKNOWN)
+  - count_fixed_other:   CLOSED with reason_code IN (FEED_WITHDRAWN, UNKNOWN, REMEDIED)
+    (REMEDIED = fast pipeline's simplified code for DISAPPEARED findings)
 """
 from __future__ import annotations
 
@@ -50,7 +51,7 @@ def _rebuild_by_image(conn, target: date) -> None:
           SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
                      AND reason_code='ACCEPTED' THEN 1 ELSE 0 END),
           SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
-                     AND reason_code IN ('FEED_WITHDRAWN','UNKNOWN') THEN 1 ELSE 0 END),
+                     AND reason_code IN ('FEED_WITHDRAWN','UNKNOWN','REMEDIED') THEN 1 ELSE 0 END),
           SUM(CASE WHEN reopened_at IS NOT NULL
                      AND CAST(reopened_at AS DATE) = ? THEN 1 ELSE 0 END),
           SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
@@ -93,7 +94,7 @@ def _rebuild_by_workload(conn, target: date) -> None:
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
                      AND fs.reason_code='ACCEPTED' THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
-                     AND fs.reason_code IN ('FEED_WITHDRAWN','UNKNOWN') THEN 1 ELSE 0 END),
+                     AND fs.reason_code IN ('FEED_WITHDRAWN','UNKNOWN','REMEDIED') THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.reopened_at IS NOT NULL
                      AND CAST(fs.reopened_at AS DATE) = ? THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
@@ -140,7 +141,7 @@ def _rebuild_by_team(conn, target: date) -> None:
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
                      AND fs.reason_code='ACCEPTED' THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
-                     AND fs.reason_code IN ('FEED_WITHDRAWN','UNKNOWN') THEN 1 ELSE 0 END),
+                     AND fs.reason_code IN ('FEED_WITHDRAWN','UNKNOWN','REMEDIED') THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.reopened_at IS NOT NULL
                      AND CAST(fs.reopened_at AS DATE) = ? THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
@@ -190,7 +191,7 @@ def _rebuild_by_repository(conn, target: date) -> None:
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
                      AND fs.reason_code='ACCEPTED' THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.state='CLOSED' AND CAST(fs.closed_at AS DATE) = ?
-                     AND fs.reason_code IN ('FEED_WITHDRAWN','UNKNOWN') THEN 1 ELSE 0 END),
+                     AND fs.reason_code IN ('FEED_WITHDRAWN','UNKNOWN','REMEDIED') THEN 1 ELSE 0 END),
           SUM(CASE WHEN fs.reopened_at IS NOT NULL
                      AND CAST(fs.reopened_at AS DATE) = ? THEN 1 ELSE 0 END)
         FROM image_in_repository iir
