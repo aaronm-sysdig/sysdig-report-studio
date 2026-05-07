@@ -190,6 +190,70 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
     else:
         closed_count = 0
 
+    # 6. Write daily OPEN snapshot for historical rollup accuracy
+    # This captures the OPEN count per image at this point in time,
+    # so rollups rebuilt later can reconstruct historical trends.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_open_snapshot (
+            date DATE,
+            image_id VARCHAR,
+            count_open INTEGER,
+            count_open_critical INTEGER,
+            count_open_high INTEGER,
+            count_open_medium INTEGER,
+            count_open_low INTEGER,
+            UNIQUE(date, image_id)
+        )
+    """)
+
+    conn.execute(f"""
+        INSERT INTO daily_open_snapshot (
+            date, image_id, count_open,
+            count_open_critical, count_open_high,
+            count_open_medium, count_open_low
+        )
+        SELECT
+            '{today}'::DATE AS date,
+            image_id,
+            COUNT(*) AS count_open,
+            SUM(CASE WHEN severity = 'Critical' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN severity = 'High' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN severity = 'Medium' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN severity = 'Low' THEN 1 ELSE 0 END)
+        FROM finding_state
+        WHERE state = 'OPEN'
+        GROUP BY image_id
+        ON CONFLICT (date, image_id) DO UPDATE SET
+            count_open = EXCLUDED.count_open,
+            count_open_critical = EXCLUDED.count_open_critical,
+            count_open_high = EXCLUDED.count_open_high,
+            count_open_medium = EXCLUDED.count_open_medium,
+            count_open_low = EXCLUDED.count_open_low
+    """)
+
+    # 7. Write daily CLOSED transitions snapshot (from _disappeared before cleanup)
+    # Captures closed counts per image for images that may have no OPEN findings left.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_closed_snapshot (
+            date DATE,
+            image_id VARCHAR,
+            count_closed INTEGER,
+            UNIQUE(date, image_id)
+        )
+    """)
+
+    conn.execute(f"""
+        INSERT INTO daily_closed_snapshot (date, image_id, count_closed)
+        SELECT
+            '{today}'::DATE AS date,
+            image_id,
+            COUNT(*) AS count_closed
+        FROM _disappeared
+        GROUP BY image_id
+        ON CONFLICT (date, image_id) DO UPDATE SET
+            count_closed = EXCLUDED.count_closed
+    """)
+
     # Cleanup
     conn.execute("DROP TABLE IF EXISTS _today_findings")
     conn.execute("DROP TABLE IF EXISTS _classified")

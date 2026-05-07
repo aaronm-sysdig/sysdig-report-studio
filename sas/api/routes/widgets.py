@@ -15,7 +15,7 @@ _CATALOG = [
             "time": {"mode": "last_n_snapshots", "n": 90, "granularity": "day"},
             "measure": "count_open",
             "filters": [],
-            "group_by": ["severity"],
+            "group_by": [],
             "order_by": None,
             "limit": None,
         },

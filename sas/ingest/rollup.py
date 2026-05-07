@@ -26,6 +26,9 @@ def _rebuild_by_image(conn, target: date) -> None:
     conn.execute(
         "DELETE FROM daily_metrics_by_image WHERE date = ?", [target]
     )
+    # Use daily_open_snapshot for historical OPEN counts (captured at ingest time).
+    # Use daily_closed_snapshot for CLOSED transitions (images with no OPEN left).
+    # Use finding_state for NEW and REOPENED transitions.
     conn.execute(
         """
         INSERT INTO daily_metrics_by_image (
@@ -37,29 +40,40 @@ def _rebuild_by_image(conn, target: date) -> None:
         )
         SELECT
           ? AS date,
-          image_id,
-          SUM(CASE WHEN state='OPEN' AND severity='Critical' THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='OPEN' AND severity='High' THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='OPEN' AND severity='Medium' THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='OPEN' AND severity='Low' THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='OPEN' THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='OPEN' AND CAST(first_seen AS DATE) = ? THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
-                     AND reason_code='PATCHED' THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
-                     AND reason_code IN ('RETIRED','SCALED_TO_ZERO') THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
-                     AND reason_code='ACCEPTED' THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
-                     AND reason_code IN ('FEED_WITHDRAWN','UNKNOWN','REMEDIED') THEN 1 ELSE 0 END),
-          SUM(CASE WHEN reopened_at IS NOT NULL
-                     AND CAST(reopened_at AS DATE) = ? THEN 1 ELSE 0 END),
-          SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
-                     THEN days_open ELSE 0 END),
-          SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
-                     THEN 1 ELSE 0 END)
-        FROM finding_state
-        GROUP BY image_id
+          all_img.image_id,
+          COALESCE(dos.count_open_critical, 0),
+          COALESCE(dos.count_open_high, 0),
+          COALESCE(dos.count_open_medium, 0),
+          COALESCE(dos.count_open_low, 0),
+          COALESCE(dos.count_open, 0),
+          COALESCE(tr.count_new, 0),
+          0 AS count_fixed_patched,
+          0 AS count_fixed_retired,
+          0 AS count_fixed_accepted,
+          COALESCE(dcs.count_closed, 0) AS count_fixed_other,
+          COALESCE(tr.count_regressed, 0),
+          COALESCE(tr.mttr_sum, 0),
+          COALESCE(tr.mttr_count, 0)
+        FROM (
+          SELECT image_id FROM daily_open_snapshot WHERE date = ?
+          UNION
+          SELECT image_id FROM daily_closed_snapshot WHERE date = ?
+        ) all_img
+        LEFT JOIN daily_open_snapshot dos ON dos.image_id = all_img.image_id AND dos.date = ?
+        LEFT JOIN daily_closed_snapshot dcs ON dcs.image_id = all_img.image_id AND dcs.date = ?
+        LEFT JOIN (
+          SELECT
+            image_id,
+            SUM(CASE WHEN state='OPEN' AND CAST(first_seen AS DATE) = ? THEN 1 ELSE 0 END) AS count_new,
+            SUM(CASE WHEN reopened_at IS NOT NULL
+               AND CAST(reopened_at AS DATE) = ? THEN 1 ELSE 0 END) AS count_regressed,
+            SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
+               THEN days_open ELSE 0 END) AS mttr_sum,
+            SUM(CASE WHEN state='CLOSED' AND CAST(closed_at AS DATE) = ?
+               THEN 1 ELSE 0 END) AS mttr_count
+          FROM finding_state
+          GROUP BY image_id
+        ) tr ON tr.image_id = all_img.image_id
         """,
         [target, target, target, target, target, target, target, target, target],
     )
