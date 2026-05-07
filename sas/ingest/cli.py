@@ -25,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Re-ingest even if snapshot_id already recorded")
     parser.add_argument("--fast", action="store_true",
                         help="Use DuckDB-native pipeline (no Pandas, ~10x faster)")
+    parser.add_argument("--legacy", action="store_true",
+                        help="Legacy v1 format (gz, different columns, filters Critical+High)")
     args = parser.parse_args(argv)
 
     cfg = get_config()
@@ -37,7 +39,21 @@ def main(argv: list[str] | None = None) -> int:
         create_schema(conn)
         migrate_schema(conn)
 
-        if args.fast:
+        if args.legacy:
+            from sas.ingest.fast_pipeline import run_pipeline as fast_run_pipeline
+            from sas.ingest.legacy_loader import load_legacy_csv
+            # Patch the loader for this run
+            import sas.ingest.fast_pipeline as fp
+            orig_load = fp.load_csv_to_temp
+            fp.load_csv_to_temp = lambda c, p: load_legacy_csv(c, p, severities=['Critical', 'High'])
+            try:
+                result = fast_run_pipeline(
+                    conn=conn, csv_path=args.csv,
+                    resolver=resolver, force=args.force,
+                )
+            finally:
+                fp.load_csv_to_temp = orig_load
+        elif args.fast:
             from sas.ingest.fast_pipeline import run_pipeline as fast_run_pipeline
             result = fast_run_pipeline(
                 conn=conn, csv_path=args.csv,
