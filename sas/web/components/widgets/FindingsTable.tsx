@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -900,6 +900,75 @@ function BooleanCheckbox({
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// Column autosizing hook — measures content via DOM after data loads
+// ---------------------------------------------------------------------------
+function useColumnAutoSizing<T extends object>(
+  table: {
+    getHeaderGroups: () => unknown[];
+    getRowModel: () => { rows: unknown[] };
+    setColumnSizing: (s: Record<string, number>) => void;
+  },
+  data: T[],
+  columns: unknown[]
+) {
+  const prevLenRef = useRef(0);
+
+  useEffect(() => {
+    if (!data.length) return;
+    if (data.length === prevLenRef.current) return;
+    prevLenRef.current = data.length;
+
+    requestAnimationFrame(() => {
+      const headerGroups = table.getHeaderGroups();
+      if (!headerGroups.length) return;
+      const headers = (headerGroups[0] as any).headers;
+      const rows = table.getRowModel().rows;
+
+      const sizing: Record<string, number> = {};
+      const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
+      const ctx = canvas ? canvas.getContext("2d") : null;
+
+      for (const header of headers) {
+        const colId = header.id;
+        const colDef = header.column.columnDef;
+        const minSize = colDef.minSize ?? 60;
+        const maxSize = colDef.maxSize ?? 400;
+
+        let maxWidth = 0;
+
+        // Measure header
+        const headerText = typeof colDef.header === "string" ? colDef.header : "";
+        if (ctx && headerText) {
+          ctx.font = "10px system-ui, -apple-system, sans-serif";
+          maxWidth = Math.max(maxWidth, ctx.measureText(headerText).width + 36);
+        } else {
+          maxWidth = Math.max(maxWidth, 60);
+        }
+
+        // Measure first 20 cells
+        const sampleRows = rows.slice(0, 20);
+        for (const row of sampleRows) {
+          const cell = (row as any).getVisibleCells().find((c: any) => c.column.id === colId);
+          if (!cell) continue;
+          const val = String(cell.getValue());
+          if (ctx && val) {
+            const isMono = colDef.cell && String(colDef.cell).includes("font-mono");
+            ctx.font = isMono ? "11px menlo, monospace" : "11px system-ui, -apple-system, sans-serif";
+            maxWidth = Math.max(maxWidth, ctx.measureText(val).width + 36);
+          }
+        }
+
+        sizing[colId] = Math.max(minSize, Math.min(maxSize, Math.ceil(maxWidth)));
+      }
+
+      console.log("[FindingsTable] autosized columns:", sizing);
+      table.setColumnSizing(sizing);
+    });
+  }, [data, columns, table]);
+}
+
 // ---------------------------------------------------------------------------
 // Generic table renderer with column resize support
 // ---------------------------------------------------------------------------
@@ -915,18 +984,29 @@ function ResizableTable<T extends object>({
   colSpan: number;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnSizing, setColumnSizing] = useState<Record<string, number>>(() => {
+    const s: Record<string, number> = {};
+    for (const c of columns) {
+      const id = (c as { id?: string; accessorKey?: string }).id || (c as { accessorKey?: string }).accessorKey || "";
+      if (id) s[id] = (c as { size?: number }).size ?? 120;
+    }
+    return s;
+  });
 
   const table = useReactTable({
     ...TABLE_DEFAULTS,
     data,
     columns,
-    state: { sorting },
+    state: { sorting, columnSizing },
     onSortingChange: setSorting,
+    onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     manualPagination: true,
   });
+
+  useColumnAutoSizing(table, data, columns);
 
   return (
     <table className="w-full text-left border-collapse" style={{ tableLayout: "fixed" }}>
@@ -1604,17 +1684,29 @@ export function FindingsTable() {
   // ---------------------------------------------------------------------------
   // Flat-list TanStack table (used only when groupBy === "none")
   // ---------------------------------------------------------------------------
+  const [flatColumnSizing, setFlatColumnSizing] = useState<Record<string, number>>(() => {
+    const s: Record<string, number> = {};
+    for (const c of FLAT_COLUMNS) {
+      const id = (c as { id?: string; accessorKey?: string }).id || (c as { accessorKey?: string }).accessorKey || "";
+      if (id) s[id] = (c as { size?: number }).size ?? 120;
+    }
+    return s;
+  });
+
   const flatTable = useReactTable({
     ...TABLE_DEFAULTS,
     data: filteredRows,
     columns: flatColumns,
-    state: { sorting },
+    state: { sorting, columnSizing: flatColumnSizing },
     onSortingChange: setSorting,
+    onColumnSizingChange: setFlatColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     manualPagination: true,
   });
+
+  useColumnAutoSizing(flatTable, filteredRows, flatColumns);
 
   // ---------------------------------------------------------------------------
   // Pagination labels
