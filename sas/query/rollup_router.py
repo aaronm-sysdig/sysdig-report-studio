@@ -25,8 +25,7 @@ _ROLLUP_MEASURES = {
 
 _LENS_TO_ROLLUP = {
     "Image":      "daily_metrics_by_image",
-    "Workload":   "daily_metrics_by_workload",
-    "Team":       "daily_metrics_by_team",
+    # "Workload":   "daily_metrics_by_workload",  # DEPRECATED: inflated counts
     "Repository": "daily_metrics_by_repository",
     "Cluster":    "daily_metrics_by_cluster_severity",
 }
@@ -37,8 +36,7 @@ _LENS_TO_ROLLUP = {
 # presence means the query needs the direct path (joining finding_state).
 _ROLLUP_FILTER_COLUMNS: dict[str, set[str]] = {
     "daily_metrics_by_image": {"image_id"},
-    "daily_metrics_by_workload": {"cluster_name", "namespace_name", "workload_type", "workload_name"},
-    "daily_metrics_by_team": {"team_id"},
+    # "daily_metrics_by_workload": {"cluster_name", "namespace_name", "workload_type", "workload_name"},  # DEPRECATED
     "daily_metrics_by_repository": {"repository"},
     "daily_metrics_by_cluster_severity": {"cluster_name", "severity"},
 }

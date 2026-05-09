@@ -10,7 +10,6 @@ LENSES: dict[str, dict] = {
     "Namespace":  {"primary_table": "namespace",   "pk": ("cluster_name", "namespace_name")},
     "Package":    {"primary_table": "package",     "pk": ("package_name", "package_type")},
     "Repository": {"primary_table": "repository",  "pk": "repository"},
-    "Team":       {"primary_table": "team",        "pk": "team_id"},
     "Owner":      {"primary_table": "owner",       "pk": "owner_id"},
 }
 

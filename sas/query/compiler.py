@@ -46,8 +46,7 @@ _ROLLUP_MEASURE_EXPR = {
 # Primary key / entity identifier column per rollup table.
 _ROLLUP_LENS_PK = {
     "daily_metrics_by_image":            "image_id",
-    "daily_metrics_by_workload":         "workload_name",
-    "daily_metrics_by_team":             "team_id",
+    # "daily_metrics_by_workload":         "workload_name",  # DEPRECATED: inflated counts
     "daily_metrics_by_repository":       "repository",
     "daily_metrics_by_cluster_severity": "cluster_name",
 }
@@ -97,10 +96,10 @@ _LENS_JOIN_SQL = {
     "Repository": (
         "JOIN image_in_repository iir ON iir.image_id = finding_state.image_id"
     ),
-    "Workload": (
-        "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
-        "  AND wri.date = CAST(finding_state.last_seen AS DATE)"
-    ),
+    # "Workload": (  # DEPRECATED
+        # "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
+        # "  AND wri.date = CAST(finding_state.last_seen AS DATE)"
+    # ),
     "Cluster": (
         "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
         "  AND wri.date = CAST(finding_state.last_seen AS DATE)"
@@ -108,14 +107,6 @@ _LENS_JOIN_SQL = {
     "Namespace": (
         "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
         "  AND wri.date = CAST(finding_state.last_seen AS DATE)"
-    ),
-    "Team": (
-        "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
-        "  AND wri.date = CAST(finding_state.last_seen AS DATE) "
-        "JOIN workload_owned_by wo ON wo.cluster_name = wri.cluster_name "
-        "  AND wo.namespace_name = wri.namespace_name "
-        "  AND wo.workload_type = wri.workload_type "
-        "  AND wo.workload_name = wri.workload_name"
     ),
     "Owner": (
         "JOIN workload_runs_image_daily wri ON wri.image_id = finding_state.image_id "
@@ -133,10 +124,9 @@ _DIRECT_LENS_PK_COL = {
     "CVE":        "finding_state.cve_id",
     "Package":    "finding_state.package_name",
     "Repository": "iir.repository",
-    "Workload":   "wri.workload_name",
+    # "Workload":   "wri.workload_name",  # DEPRECATED
     "Cluster":    "wri.cluster_name",
     "Namespace":  "wri.namespace_name",
-    "Team":       "wo.team_id",
     "Owner":      "wo.owner_id",
 }
 

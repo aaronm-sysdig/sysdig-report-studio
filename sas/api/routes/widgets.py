@@ -1,10 +1,10 @@
-"""GET /api/widgets/catalog — hardcoded catalog of 10 starter widget definitions."""
+"""GET /api/widgets/catalog — hardcoded catalog of starter widget definitions."""
 
 from fastapi import APIRouter
 
 router = APIRouter()
 
-_CATALOG = [
+_CATALOG: list[dict] = [
     {
         "id": "image-remediation-story",
         "title": "Image Remediation Story",
@@ -81,21 +81,6 @@ _CATALOG = [
         },
     },
     {
-        "id": "mttr-by-team",
-        "title": "MTTR by Team",
-        "widget_type": "bar",
-        "query": {
-            "lens": "Team",
-            "traversal": [],
-            "time": {"mode": "last_n_snapshots", "n": 90, "granularity": "day"},
-            "measure": "mttr",
-            "filters": [],
-            "group_by": [],
-            "order_by": None,
-            "limit": None,
-        },
-    },
-    {
         "id": "unique-cves-open",
         "title": "Unique CVEs Open",
         "widget_type": "line",
@@ -104,21 +89,6 @@ _CATALOG = [
             "traversal": [],
             "time": {"mode": "last_n_snapshots", "n": 90, "granularity": "day"},
             "measure": "count_distinct_cve",
-            "filters": [],
-            "group_by": [],
-            "order_by": None,
-            "limit": None,
-        },
-    },
-    {
-        "id": "team-leaderboard-open",
-        "title": "Team Leaderboard — Open",
-        "widget_type": "bar",
-        "query": {
-            "lens": "Team",
-            "traversal": [],
-            "time": {"mode": "last_n_snapshots", "n": 30, "granularity": "day"},
-            "measure": "count_open",
             "filters": [],
             "group_by": [],
             "order_by": None,
@@ -155,10 +125,47 @@ _CATALOG = [
             "limit": None,
         },
     },
+    # -- deprecated / hidden (kept for reference) --
+    {
+        "id": "mttr-by-team",
+        "title": "MTTR by Team",
+        "widget_type": "bar",
+        "hidden": True,
+        "hide_reason": "Team lens removed — namespace-derived teams don't represent real ownership boundaries",
+        "query": {
+            "lens": "Team",
+            "traversal": [],
+            "time": {"mode": "last_n_snapshots", "n": 90, "granularity": "day"},
+            "measure": "mttr",
+            "filters": [],
+            "group_by": [],
+            "order_by": None,
+            "limit": None,
+        },
+    },
+    {
+        "id": "team-leaderboard-open",
+        "title": "Team Leaderboard — Open",
+        "widget_type": "bar",
+        "hidden": True,
+        "hide_reason": "Team lens removed — namespace-derived teams don't represent real ownership boundaries",
+        "query": {
+            "lens": "Team",
+            "traversal": [],
+            "time": {"mode": "last_n_snapshots", "n": 30, "granularity": "day"},
+            "measure": "count_open",
+            "filters": [],
+            "group_by": [],
+            "order_by": None,
+            "limit": None,
+        },
+    },
 ]
 
 
 @router.get("/widgets/catalog", tags=["widgets"])
-def get_catalog() -> list[dict]:
-    """Return the 10 hardcoded starter widget definitions."""
-    return _CATALOG
+def get_catalog(hidden: bool = False) -> list[dict]:
+    """Return starter widget definitions. Pass ?hidden=true to include deprecated widgets."""
+    if hidden:
+        return _CATALOG
+    return [w for w in _CATALOG if not w.get("hidden")]
