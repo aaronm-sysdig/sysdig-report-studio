@@ -3,8 +3,8 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { WidgetCard } from "./WidgetCard";
-import { runQuery, getEntities } from "@/lib/api/client";
-import type { QueryIn, QueryResult } from "@/lib/api/client";
+import { runQuery, getEntities, getTagsForRepository } from "@/lib/api/client";
+import type { QueryIn, QueryResult, TagEntity } from "@/lib/api/client";
 import { Input } from "@/components/ui/input";
 import {
   CHART_COLORS,
@@ -34,7 +34,7 @@ interface ImageEntity {
   id: string;
   label: string;
   repository: string;
-  tag: string;
+  tag: string | null;
   last_seen: string;
   first_seen?: string;
 }
@@ -814,6 +814,68 @@ function RepositoryPicker({ repositories, selectedRepo, onSelect }: RepositoryPi
 }
 
 // ---------------------------------------------------------------------------
+// Tag selector
+// ---------------------------------------------------------------------------
+interface TagSelectProps {
+  repository: string;
+  selectedTag: string | null;
+  onSelect: (tag: string | null) => void;
+}
+
+function TagSelect({ repository, selectedTag, onSelect }: TagSelectProps) {
+  const [tags, setTags] = useState<TagEntity[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!repository) {
+      setTags([]);
+      return;
+    }
+    setLoading(true);
+    getTagsForRepository(repository)
+      .then((result) => setTags(result))
+      .catch(() => setTags([]))
+      .finally(() => setLoading(false));
+  }, [repository]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    onSelect(value === "__all__" ? null : value);
+  };
+
+  return (
+    <div className="flex items-center gap-1">
+      <span
+        className="text-[11px] font-medium"
+        style={{ color: "var(--fg-muted)" }}
+      >
+        Tag:
+      </span>
+      <select
+        value={selectedTag ?? "__all__"}
+        onChange={handleChange}
+        disabled={loading || tags.length === 0}
+        className="text-[11px] rounded px-2 py-1 h-[36px]"
+        style={{
+          border: "1px solid var(--border-subtle)",
+          background: "var(--bg-surface)",
+          color: "var(--fg-primary)",
+          cursor: loading ? "wait" : "pointer",
+          maxWidth: 200,
+        }}
+      >
+        <option value="__all__">All tags</option>
+        {tags.map((t) => (
+          <option key={t.tag} value={t.tag}>
+            {t.tag} ({t.image_count})
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export function ImageRemediationStory({ repository: externalRepo }: ImageRemediationStoryProps) {
@@ -825,6 +887,7 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
   const [genealogyRows, setGenealogyRows] = useState<TagGenealogyRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [axisLabels, setAxisLabels] = useState(false);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
 
   // Load entity list
   useEffect(() => {
@@ -868,7 +931,12 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
     return allImages.filter((img) => (img.repository || img.id) === selectedRepo);
   }, [allImages, selectedRepo]);
 
-  const imageIds = useMemo<string[]>(() => imagesInRepo.map((img) => img.id), [imagesInRepo]);
+  const imageIds = useMemo<string[]>(() => {
+    if (!selectedTag) return imagesInRepo.map((img) => img.id);
+    return imagesInRepo
+      .filter((img) => img.tag !== null && img.tag === selectedTag)
+      .map((img) => img.id);
+  }, [imagesInRepo, selectedTag]);
 
   // Load chart data whenever selected repository changes
   useEffect(() => {
@@ -1122,18 +1190,30 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
       <div className="flex flex-col gap-3">
         {/* Repository picker (only when no external repo prop) */}
         {!externalRepo && (
-          <div style={{ height: 36 }}>
+          <div className="flex items-center gap-3 flex-wrap">
             {allImages === null ? (
               <div
                 className="h-[36px] w-full animate-pulse rounded"
                 style={{ backgroundColor: "var(--bg-surface)" }}
               />
             ) : (
-              <RepositoryPicker
-                repositories={repositories}
-                selectedRepo={selectedRepo ?? ""}
-                onSelect={setSelectedRepo}
-              />
+              <>
+                <RepositoryPicker
+                  repositories={repositories}
+                  selectedRepo={selectedRepo ?? ""}
+                  onSelect={(repo) => {
+                    setSelectedRepo(repo);
+                    setSelectedTag(null);
+                  }}
+                />
+                {selectedRepo && (
+                  <TagSelect
+                    repository={selectedRepo}
+                    selectedTag={selectedTag}
+                    onSelect={setSelectedTag}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
