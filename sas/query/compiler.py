@@ -223,7 +223,6 @@ def _compile_rollup(
     t0 = time.monotonic()
     pk_col = _ROLLUP_LENS_PK[table]
     measure_expr = _ROLLUP_MEASURE_EXPR[query.measure]
-    filter_sql, filter_params = _build_filter_clause(query.filters)
 
     # Check if we need to join the image table for current_tag filter
     has_tag_filter = any(
@@ -235,8 +234,20 @@ def _compile_rollup(
         group_cols_sql = ", " + ", ".join(query.group_by)
 
     if has_tag_filter and table == "daily_metrics_by_image":
+        # Rewrite filters to use correct table aliases when joining image table
+        # - current_tag -> img.current_tag
+        # - image_id -> dm.image_id (avoid ambiguity since both tables have it)
+        effective_filters = []
+        for f in query.filters:
+            if f.field == "current_tag":
+                effective_filters.append(Filter(field="img.current_tag", operator=f.operator, value=f.value))
+            elif f.field == pk_col:
+                effective_filters.append(Filter(field=f"dm.{pk_col}", operator=f.operator, value=f.value))
+            else:
+                effective_filters.append(f)
+        filter_sql, filter_params = _build_filter_clause(effective_filters)
+
         # Join image table to filter by current_tag, then aggregate
-        # Qualify pk_col with alias to avoid ambiguity
         sql = (
             f"SELECT date, dm.{pk_col}{group_cols_sql}, {measure_expr} AS value "
             f"FROM {table} dm "
@@ -245,6 +256,7 @@ def _compile_rollup(
             f"ORDER BY date"
         )
     else:
+        filter_sql, filter_params = _build_filter_clause(query.filters)
         sql = (
             f"SELECT date, {pk_col}{group_cols_sql}, {measure_expr} AS value "
             f"FROM {table} "
