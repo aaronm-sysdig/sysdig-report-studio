@@ -346,3 +346,47 @@ def test_direct_path_workload_lens_works():
     assert result.exec_time_ms >= 0
     assert len(result.series) >= 1
     assert "workload_name" in result.series[0].key
+
+
+# ---------------------------------------------------------------------------
+# current_tag filter test: rollup query with current_tag must join image table
+# ---------------------------------------------------------------------------
+
+def test_rollup_path_with_current_tag_filter_joins_image_table(seeded_db):
+    """When current_tag filter is present, rollup query should join image table."""
+    from sas.query.compiler import compile as sas_compile
+    from sas.query.primitives import Query, TimeWindow, Filter
+
+    conn = seeded_db
+    # Seed snapshot row so last_n_snapshots resolves to 2026-04-10
+    conn.execute(
+        "INSERT INTO snapshot (snapshot_id, snapshot_at, source_filename, row_count, ingested_at) VALUES "
+        "('snap1', '2026-04-10 12:00:00+00'::TIMESTAMPTZ, 'snapshot.csv', 3, NOW())"
+    )
+    # Seed a second image with different tag
+    conn.execute(
+        "INSERT INTO image VALUES ('sha256:bbb', 'linux', NOW(), NOW(), 'myrepo', 'v2')"
+    )
+    # Seed rollup row for second image
+    conn.execute(
+        """
+        INSERT INTO daily_metrics_by_image (
+            date, image_id, count_open_critical, count_open_high, count_open_medium, count_open_low,
+            count_open, count_new, count_fixed_patched, count_fixed_retired, count_fixed_accepted, count_fixed_other,
+            count_regressed, mttr_sum, mttr_count
+        ) VALUES ('2026-04-10', 'sha256:bbb', 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0)
+        """
+    )
+
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_open",
+        filters=[Filter(field="current_tag", operator="eq", value="v1")],
+    )
+
+    result = sas_compile(q, conn)
+    # Should only return data for sha256:aaa (tag v1), not sha256:bbb (tag v2)
+    total = sum(sum(s.y) for s in result.series)
+    assert total == 2  # Only the two OPEN findings from sha256:aaa

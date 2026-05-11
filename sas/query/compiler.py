@@ -225,16 +225,32 @@ def _compile_rollup(
     measure_expr = _ROLLUP_MEASURE_EXPR[query.measure]
     filter_sql, filter_params = _build_filter_clause(query.filters)
 
+    # Check if we need to join the image table for current_tag filter
+    has_tag_filter = any(
+        f.field == "current_tag" for f in query.filters
+    )
+
     group_cols_sql = ""
     if query.group_by:
         group_cols_sql = ", " + ", ".join(query.group_by)
 
-    sql = (
-        f"SELECT date, {pk_col}{group_cols_sql}, {measure_expr} AS value "
-        f"FROM {table} "
-        f"WHERE date BETWEEN ? AND ?{filter_sql} "
-        f"ORDER BY date"
-    )
+    if has_tag_filter and table == "daily_metrics_by_image":
+        # Join image table to filter by current_tag, then aggregate
+        # Qualify pk_col with alias to avoid ambiguity
+        sql = (
+            f"SELECT date, dm.{pk_col}{group_cols_sql}, {measure_expr} AS value "
+            f"FROM {table} dm "
+            f"JOIN image img ON img.image_id = dm.{pk_col} "
+            f"WHERE date BETWEEN ? AND ?{filter_sql} "
+            f"ORDER BY date"
+        )
+    else:
+        sql = (
+            f"SELECT date, {pk_col}{group_cols_sql}, {measure_expr} AS value "
+            f"FROM {table} "
+            f"WHERE date BETWEEN ? AND ?{filter_sql} "
+            f"ORDER BY date"
+        )
 
     rows = conn.execute(sql, [start, end] + filter_params).fetchall()
     col_names = [d[0] for d in conn.description]
