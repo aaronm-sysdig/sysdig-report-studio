@@ -58,6 +58,22 @@ export async function getEntities(
   return apiFetch<unknown[]>(`/api/entities/${lens}${qs}`);
 }
 
+export interface TagEntity {
+  tag: string;
+  image_count: number;
+}
+
+/**
+ * GET /api/entities/tags?repository=X — list distinct tags for a repository.
+ */
+export async function getTagsForRepository(
+  repository: string
+): Promise<TagEntity[]> {
+  return apiFetch<TagEntity[]>(
+    `/api/entities/tags?repository=${encodeURIComponent(repository)}`
+  );
+}
+
 export type FindingsResponse = components["schemas"]["FindingsResponse"];
 
 /**
