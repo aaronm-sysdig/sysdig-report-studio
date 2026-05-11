@@ -109,16 +109,27 @@ function repoQuery(measure: string, imageIds: string[]): QueryIn {
  * When a query filters by image_id IN [...], the rollup path returns one
  * series per image_id — NOT a pre-aggregated single series. We must sum
  * across all series at each date to get the repository-wide total.
+ *
+ * If `snapshotRange` is provided, the returned date array covers the full
+ * range and dates with no data are filled with 0.
  */
-function extractSeries(result: QueryResult): { dates: string[]; values: number[] } {
+function extractSeries(
+  result: QueryResult,
+  snapshotRange?: [string, string],
+): { dates: string[]; values: number[] } {
   if (!result.series.length) return { dates: [], values: [] };
 
-  // Collect all dates across every series
-  const dateSet = new Set<string>();
-  for (const s of result.series) {
-    for (const d of s.x as string[]) dateSet.add(d);
+  // Build a date spine: either from snapshot_range or from the series data
+  let dates: string[];
+  if (snapshotRange && snapshotRange[0] && snapshotRange[1]) {
+    dates = buildDateSpine(snapshotRange[0], snapshotRange[1]);
+  } else {
+    const dateSet = new Set<string>();
+    for (const s of result.series) {
+      for (const d of s.x as string[]) dateSet.add(d);
+    }
+    dates = Array.from(dateSet).sort();
   }
-  const dates = Array.from(dateSet).sort();
 
   // Sum values across all series at each date
   const values = dates.map((d) => {
@@ -134,6 +145,17 @@ function extractSeries(result: QueryResult): { dates: string[]; values: number[]
   });
 
   return { dates, values };
+}
+
+/** Build a list of ISO date strings from start to end (inclusive, daily). */
+function buildDateSpine(start: string, end: string): string[] {
+  const dates: string[] = [];
+  const s = new Date(start + "T00:00:00Z");
+  const e = new Date(end + "T00:00:00Z");
+  for (const d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  return dates;
 }
 
 /** Align multiple value arrays to a shared dates array */
@@ -971,13 +993,16 @@ export function ImageRemediationStory({ repository: externalRepo }: ImageRemedia
         ]) => {
           if (cancelled) return;
 
-          const critSeries = extractSeries(critResult);
-          const highSeries = extractSeries(highResult);
-          const medSeries = extractSeries(medResult);
-          const lowSeries = extractSeries(lowResult);
-          const newSeries = extractSeries(newResult);
-          const fixSeries = extractSeries(fixResult);
-          const regSeries = extractSeries(regResult);
+          // Use snapshot_range from the first result as the canonical date spine
+          const range = critResult.snapshot_range as [string, string] | undefined;
+
+          const critSeries = extractSeries(critResult, range);
+          const highSeries = extractSeries(highResult, range);
+          const medSeries = extractSeries(medResult, range);
+          const lowSeries = extractSeries(lowResult, range);
+          const newSeries = extractSeries(newResult, range);
+          const fixSeries = extractSeries(fixResult, range);
+          const regSeries = extractSeries(regResult, range);
 
           const { dates, aligned } = alignToSharedDates([
             critSeries,
