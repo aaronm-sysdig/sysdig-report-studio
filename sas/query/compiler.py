@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 from datetime import date, timedelta
 
-from sas.query.primitives import Query, QueryResult, Series
+from sas.query.primitives import Query, QueryResult, Series, Filter
 from sas.query.registry import LENSES
 from sas.query.rollup_router import can_use_rollup
 
@@ -278,9 +278,28 @@ def _compile_direct(
     # Unqualified alias for SELECT column name and GROUP BY
     pk_col = qualified_pk.split(".")[-1]
 
+    # Add image table join if current_tag filter is present
+    has_tag_filter = any(
+        f.field == "current_tag" for f in query.filters
+    )
+    if has_tag_filter and not join_sql:
+        # No existing join, add image join
+        join_sql = "JOIN image img ON img.image_id = finding_state.image_id"
+    elif has_tag_filter:
+        # Existing join present, add image join alongside
+        join_sql = join_sql + "\nJOIN image img ON img.image_id = finding_state.image_id"
+
+    # Rewrite current_tag filter to use joined alias
+    effective_filters = []
+    for f in query.filters:
+        if f.field == "current_tag":
+            effective_filters.append(Filter(field="img.current_tag", operator=f.operator, value=f.value))
+        else:
+            effective_filters.append(f)
+
     date_col, base_predicate = _DIRECT_DATE_COL[query.measure]
     aggregate = _DIRECT_AGGREGATE[query.measure]
-    filter_sql, filter_params = _build_filter_clause(query.filters)
+    filter_sql, filter_params = _build_filter_clause(effective_filters)
 
     group_cols_sql = ""
     if query.group_by:

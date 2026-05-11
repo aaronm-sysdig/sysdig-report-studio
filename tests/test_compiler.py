@@ -390,3 +390,58 @@ def test_rollup_path_with_current_tag_filter_joins_image_table(seeded_db):
     # Should only return data for sha256:aaa (tag v1), not sha256:bbb (tag v2)
     total = sum(sum(s.y) for s in result.series)
     assert total == 2  # Only the two OPEN findings from sha256:aaa
+
+
+# ---------------------------------------------------------------------------
+# current_tag filter test: direct path query with current_tag must join image table
+# ---------------------------------------------------------------------------
+
+def test_direct_path_with_current_tag_filter_joins_image_table(seeded_db):
+    """When current_tag filter is present on direct path, join image table."""
+    from sas.query.compiler import compile as sas_compile
+    from sas.query.primitives import Query, TimeWindow, Filter
+
+    conn = seeded_db
+
+    # Seed snapshot so last_n_snapshots resolves
+    conn.execute(
+        "INSERT INTO snapshot (snapshot_id, snapshot_at, source_filename, row_count, ingested_at) VALUES "
+        "('snap1', '2026-04-10 12:00:00+00'::TIMESTAMPTZ, 'snapshot.csv', 3, NOW())"
+    )
+
+    # Seed a second image with different tag
+    conn.execute(
+        "INSERT INTO image VALUES ('sha256:bbb', 'linux', NOW(), NOW(), 'myrepo', 'v2')"
+    )
+    # Seed a CVE for the second image
+    conn.execute(
+        "INSERT INTO cve VALUES ('CVE-2024-0004', NULL, NULL, 'v3', 'High', NULL, NULL, FALSE, NOW(), NOW())"
+    )
+    # Seed a finding for the second image
+    conn.execute(
+        """
+        INSERT INTO finding_state VALUES
+        (4, 'sha256:bbb', 'CVE-2024-0004', 'openssl', '1.0', '/usr/lib',
+         'High', 9.8, TRUE, TRUE, '1.1', FALSE, TRUE, FALSE,
+         '2026-04-01'::TIMESTAMPTZ, '2026-04-10'::TIMESTAMPTZ,
+         'OPEN', 'NEW', NULL, NULL, 0, 9, FALSE)
+        """
+    )
+
+    # Use a measure that forces direct path (count_distinct_cve)
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_distinct_cve",
+        filters=[Filter(field="current_tag", operator="eq", value="v1")],
+    )
+
+    result = sas_compile(q, conn)
+
+    # Should only return data for sha256:aaa (tag v1), not sha256:bbb (tag v2)
+    # sha256:aaa has 2 OPEN findings (CVE-2024-0001 Critical, CVE-2024-0002 High)
+    # count_distinct_cve with OPEN predicate should yield 2 distinct CVEs
+    image_ids_in_result = [s.key.get("image_id") for s in result.series]
+    assert "sha256:aaa" in image_ids_in_result
+    assert "sha256:bbb" not in image_ids_in_result
