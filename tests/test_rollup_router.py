@@ -129,3 +129,17 @@ def test_count_fixed_patched_routes_to_image_rollup():
         filters=[],
     )
     assert can_use_rollup(q) == "daily_metrics_by_image"
+
+
+def test_image_current_tag_filter_stays_on_rollup():
+    """A filter on current_tag should still use the rollup path (Image lens)."""
+    from sas.query.primitives import Filter, Query, TimeWindow
+    from sas.query.rollup_router import can_use_rollup
+    q = Query(
+        lens="Image",
+        traversal=[],
+        time=TimeWindow(mode="last_n_snapshots", n=7, granularity="day"),
+        measure="count_open",
+        filters=[Filter(field="current_tag", operator="eq", value="codeserver")],
+    )
+    assert can_use_rollup(q) == "daily_metrics_by_image"

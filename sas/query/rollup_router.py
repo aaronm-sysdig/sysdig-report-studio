@@ -35,7 +35,7 @@ _LENS_TO_ROLLUP = {
 # Finding-level columns absent from a table must not appear here — their
 # presence means the query needs the direct path (joining finding_state).
 _ROLLUP_FILTER_COLUMNS: dict[str, set[str]] = {
-    "daily_metrics_by_image": {"image_id"},
+    "daily_metrics_by_image": {"image_id", "current_tag"},
     # "daily_metrics_by_workload": {"cluster_name", "namespace_name", "workload_type", "workload_name"},  # DEPRECATED
     "daily_metrics_by_repository": {"repository"},
     "daily_metrics_by_cluster_severity": {"cluster_name", "severity"},
