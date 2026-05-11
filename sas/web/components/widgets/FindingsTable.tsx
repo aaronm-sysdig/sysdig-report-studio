@@ -993,6 +993,17 @@ function ResizableTable<T extends object>({
     return s;
   });
 
+  // Reset columnSizing when columns change (e.g., group-by mode switch)
+  // to avoid stale accessor keys from the previous column set.
+  useEffect(() => {
+    const s: Record<string, number> = {};
+    for (const c of columns) {
+      const id = (c as { id?: string; accessorKey?: string }).id || (c as { accessorKey?: string }).accessorKey || "";
+      if (id) s[id] = (c as { size?: number }).size ?? 120;
+    }
+    setColumnSizing(s);
+  }, [columns]);
+
   const table = useReactTable({
     ...TABLE_DEFAULTS,
     data,
