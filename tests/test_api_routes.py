@@ -189,3 +189,31 @@ def test_list_findings_invalid_severity_returns_422(client_with_db):
     client, _ = client_with_db
     res = client.get("/api/findings?severity=Bogus")
     assert res.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 9. GET /api/entities/tags — distinct tags for a repository
+# ---------------------------------------------------------------------------
+
+def test_get_tags_for_repository(client_with_db):
+    """GET /api/entities/tags?repository=X returns distinct tags with counts."""
+    client, conn = client_with_db
+    # Seed images with different tags for the same repo.
+    # Use 'tag-test-repo' to avoid collision with fixture-seeded 'myrepo'.
+    conn.execute(
+        "INSERT INTO image VALUES "
+        "('sha256:aaa', 'linux', NOW(), NOW(), 'tag-test-repo', 'v1'), "
+        "('sha256:bbb', 'linux', NOW(), NOW(), 'tag-test-repo', 'v2'), "
+        "('sha256:ccc', 'linux', NOW(), NOW(), 'tag-test-repo', 'v1'), "
+        "('sha256:ddd', 'linux', NOW(), NOW(), 'other-repo', 'v1')"
+    )
+
+    response = client.get("/api/entities/tags?repository=tag-test-repo")
+    assert response.status_code == 200
+    tags = response.json()
+    tag_names = [t["tag"] for t in tags]
+    assert set(tag_names) == {"v1", "v2"}
+    # Check image counts
+    counts = {t["tag"]: t["image_count"] for t in tags}
+    assert counts["v1"] == 2  # sha256:aaa and sha256:ccc
+    assert counts["v2"] == 1  # sha256:bbb

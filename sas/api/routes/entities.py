@@ -1,4 +1,9 @@
-"""GET /api/entities/{lens} — entity picker endpoint for UI dropdowns."""
+"""Entity picker endpoints for UI dropdowns.
+
+Routes:
+- GET /api/entities/tags?repository=X  -- distinct tags for a repository
+- GET /api/entities/{lens}             -- entity values for a given lens
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -52,6 +57,22 @@ _ENTITY_QUERIES: dict[str, str] = {
         "FROM owner ORDER BY label"
     ),
 }
+
+
+@router.get("/entities/tags", tags=["entities"])
+def get_tags(repository: str, conn=Depends(get_db)) -> list[dict]:
+    """Return distinct tags for a repository, with image counts."""
+    rows = conn.execute(
+        """
+        SELECT current_tag AS tag, COUNT(DISTINCT image_id) AS image_count
+        FROM image
+        WHERE current_repository = ?
+        GROUP BY current_tag
+        ORDER BY current_tag
+        """,
+        [repository],
+    ).fetchall()
+    return [{"tag": r[0], "image_count": r[1]} for r in rows]
 
 
 @router.get("/entities/{lens}", tags=["entities"])
