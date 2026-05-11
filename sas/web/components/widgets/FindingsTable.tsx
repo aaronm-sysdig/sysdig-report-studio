@@ -13,7 +13,7 @@ import {
 import { WidgetCard } from "./WidgetCard";
 import { Input } from "@/components/ui/input";
 import { getFindings, getWorkloadCounts, getWorkloadsForCve, runQuery, getEntities } from "@/lib/api/client";
-import type { FindingsResponse, WeightedCve, QueryIn, QueryResult } from "@/lib/api/client";
+import type { FindingsResponse, WeightedCve, QueryIn, QueryResult, FilterIn } from "@/lib/api/client";
 import { CHART_COLORS } from "@/lib/charts/defaults";
 import { TABLE_DEFAULTS } from "@/lib/table.defaults";
 import { loadWeights, saveWeights, DEFAULT_WEIGHTS, type WeightConfig } from "@/lib/weighted-weights";
@@ -133,13 +133,22 @@ function SortIcon({ direction }: { direction: "asc" | "desc" | false }) {
 // ---------------------------------------------------------------------------
 // Rollup query builder for image group-by mode
 // ---------------------------------------------------------------------------
-function makeImageQuery(measure: string): QueryIn {
+function makeImageQuery(
+  measure: string,
+  fixFilter?: boolean,
+  inUseFilter?: boolean,
+  exploitFilter?: boolean,
+): QueryIn {
+  const filters: FilterIn[] = [];
+  if (fixFilter) filters.push({ field: "fix_available", operator: "=", value: true });
+  if (inUseFilter) filters.push({ field: "in_use", operator: "=", value: true });
+  if (exploitFilter) filters.push({ field: "public_exploit", operator: "=", value: true });
   return {
     lens: "Image",
     traversal: [],
     time: { mode: "last_n_snapshots" as const, n: 1, granularity: "day" as const },
     measure,
-    filters: [],
+    filters,
     group_by: ["image_id"],
     order_by: null,
     limit: null,
@@ -1353,9 +1362,16 @@ export function FindingsTable() {
     }
   }, [isFiltered, filter.field, filter.value]);
 
+  // Reset to page 0 when globalFilter changes in image group mode
+  useEffect(() => {
+    if (groupBy === "image") {
+      setServerPage(0);
+    }
+  }, [groupBy, globalFilter]);
+
   // ---------------------------------------------------------------------------
-  // Image rollup data fetch (server-side aggregated counts)
-  // Replaces client-side aggregation for groupBy="image" mode
+  // Image data fetch via direct query (server-side aggregated counts)
+  // Uses direct path when filters include non-rollup columns (fix_available, in_use, public_exploit)
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (groupBy !== "image") return;
@@ -1366,9 +1382,9 @@ export function FindingsTable() {
 
     Promise.all([
       getEntities("Image") as Promise<Array<{ id: string; label: string; repository: string; tag: string; last_seen?: string }>>,
-      runQuery(makeImageQuery("count_open_critical")),
-      runQuery(makeImageQuery("count_open_high")),
-      runQuery(makeImageQuery("count_open")),
+      runQuery(makeImageQuery("count_open_critical", fixFilter, inUseFilter, exploitFilter)),
+      runQuery(makeImageQuery("count_open_high", fixFilter, inUseFilter, exploitFilter)),
+      runQuery(makeImageQuery("count_open", fixFilter, inUseFilter, exploitFilter)),
     ])
       .then(([entities, criticalResult, highResult, totalResult]) => {
         if (cancelled) return;
@@ -1391,15 +1407,24 @@ export function FindingsTable() {
         const highMap = buildMap(highResult);
         const totalMap = buildMap(totalResult);
 
-        const rows: ImageRow[] = entities.map((entity) => ({
-          image_name: entity.label || `${entity.repository}:${entity.tag}`,
-          total_findings: totalMap.get(entity.id) ?? 0,
-          critical_count: criticalMap.get(entity.id) ?? 0,
-          high_count: highMap.get(entity.id) ?? 0,
-          distinct_cves: 0,
-          distinct_packages: 0,
-          last_seen: entity.last_seen ?? new Date().toISOString(),
-        }));
+        const rows: ImageRow[] = entities.map((entity) => {
+          const total = totalMap.get(entity.id) ?? 0;
+          const critical = criticalMap.get(entity.id) ?? 0;
+          const high = highMap.get(entity.id) ?? 0;
+          // When severity filter is active, total reflects the filtered count
+          let filteredTotal = total;
+          if (severityFilter === "Critical") filteredTotal = critical;
+          else if (severityFilter === "High") filteredTotal = high;
+          return {
+            image_name: entity.label || `${entity.repository}:${entity.tag}`,
+            total_findings: filteredTotal,
+            critical_count: critical,
+            high_count: high,
+            distinct_cves: 0,
+            distinct_packages: 0,
+            last_seen: entity.last_seen ?? new Date().toISOString(),
+          };
+        });
 
         setImageRollupData(rows);
         setImageRollupTotal(rows.length);
@@ -1413,7 +1438,7 @@ export function FindingsTable() {
       });
 
     return () => { cancelled = true; };
-  }, [groupBy]);
+  }, [groupBy, severityFilter, fixFilter, inUseFilter, exploitFilter]);
 
   // Clear image rollup data when switching away from image group mode
   useEffect(() => {
@@ -1555,9 +1580,13 @@ export function FindingsTable() {
 
   const imageRows = useMemo<ImageRow[]>(() => {
     if (groupBy !== "image") return [];
-    // Use server-side rollup data instead of client-side aggregation
-    return imageRollupData;
-  }, [groupBy, imageRollupData]);
+    // Use server-side rollup data, filtered client-side by globalFilter
+    if (!globalFilter) return imageRollupData;
+    const lower = globalFilter.toLowerCase();
+    return imageRollupData.filter((r) =>
+      r.image_name.toLowerCase().includes(lower)
+    );
+  }, [groupBy, imageRollupData, globalFilter]);
 
   const packageRows = useMemo<PackageRow[]>(() => {
     if (groupBy !== "package") return [];
@@ -1785,14 +1814,15 @@ export function FindingsTable() {
   const firstRow = serverPage * limit + 1;
   const lastRow = Math.min((serverPage + 1) * limit, total);
 
-  // Client-side pagination for image rollup data
+  // Client-side pagination for image rollup data (uses filtered count)
+  const imageFilteredTotal = imageRows.length;
   const paginatedImageRows = useMemo(() => {
     const start = serverPage * limit;
     return imageRows.slice(start, start + limit);
   }, [imageRows, serverPage, limit]);
-  const imageTotalPages = Math.max(1, Math.ceil(imageRollupTotal / limit));
+  const imageTotalPages = Math.max(1, Math.ceil(imageFilteredTotal / limit));
   const imageFirstRow = serverPage * limit + 1;
-  const imageLastRow = Math.min((serverPage + 1) * limit, imageRollupTotal);
+  const imageLastRow = Math.min((serverPage + 1) * limit, imageFilteredTotal);
 
   // Empty-state message per groupBy mode
   const emptyMessages: Record<GroupBy, string> = {
