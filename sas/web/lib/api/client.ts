@@ -87,6 +87,7 @@ export async function getFindings(opts: {
   fix_available?: boolean;
   in_use?: boolean;
   public_exploit?: boolean;
+  q?: string;
 }): Promise<FindingsResponse> {
   const params = new URLSearchParams();
   if (opts.limit !== undefined) params.set("limit", String(opts.limit));
@@ -96,6 +97,7 @@ export async function getFindings(opts: {
   if (opts.fix_available !== undefined) params.set("fix_available", opts.fix_available ? "1" : "0");
   if (opts.in_use !== undefined) params.set("in_use", opts.in_use ? "1" : "0");
   if (opts.public_exploit !== undefined) params.set("public_exploit", opts.public_exploit ? "1" : "0");
+  if (opts.q) params.set("q", opts.q);
   return apiFetch<FindingsResponse>(`/api/findings?${params.toString()}`);
 }
 

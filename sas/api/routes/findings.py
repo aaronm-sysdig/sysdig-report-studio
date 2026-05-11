@@ -40,11 +40,12 @@ def list_findings(
     fix_available: bool | None = None,
     in_use: bool | None = None,
     public_exploit: bool | None = None,
+    q: str | None = None,
     limit: int = 100,
     offset: int = 0,
     conn=Depends(get_db),
 ) -> FindingsResponse:
-    """Paginated finding_state rows. Filters: severity, state, fix_available, in_use, public_exploit. Ordered by last_seen desc."""
+    """Paginated finding_state rows. Filters: severity, state, fix_available, in_use, public_exploit, q (free-text). Ordered by last_seen desc."""
     if limit > 500:
         limit = 500  # safety cap
     if severity and severity not in ALLOWED_SEVERITIES:
@@ -69,11 +70,21 @@ def list_findings(
     if public_exploit is not None:
         where.append("fs.public_exploit = ?")
         params.append(1 if public_exploit else 0)
+    if q:
+        like = f"%{q}%"
+        where.append(
+            "(fs.cve_id LIKE ? OR COALESCE(i.current_repository || ':' || i.current_tag, fs.image_id) LIKE ? OR fs.package_name LIKE ?)"
+        )
+        params.extend([like, like, like])
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
 
     # Total count for pagination
-    count_sql = f"SELECT COUNT(*) FROM finding_state fs {where_sql}"
+    count_sql = f"""
+        SELECT COUNT(*) FROM finding_state fs
+        LEFT JOIN image i ON i.image_id = fs.image_id
+        {where_sql}
+    """
     total = conn.execute(count_sql, params).fetchone()[0]
 
     # Paginated rows

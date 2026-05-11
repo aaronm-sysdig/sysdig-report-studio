@@ -1337,7 +1337,7 @@ export function FindingsTable() {
   // Fetch
   // ---------------------------------------------------------------------------
   const fetchPage = useCallback(
-    (page: number, sev: string, st: string, fix: boolean, inUse: boolean, exploit: boolean, pageLimit: number) => {
+    (page: number, sev: string, st: string, fix: boolean, inUse: boolean, exploit: boolean, q: string, pageLimit: number) => {
       setLoading(true);
       setError(null);
       getFindings({
@@ -1348,6 +1348,7 @@ export function FindingsTable() {
         fix_available: fix ? true : undefined,
         in_use: inUse ? true : undefined,
         public_exploit: exploit ? true : undefined,
+        q: q || undefined,
       })
         .then((data) => {
           setRows(data.rows);
@@ -1363,8 +1364,8 @@ export function FindingsTable() {
   );
 
   useEffect(() => {
-    fetchPage(serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, limit);
-  }, [fetchPage, serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, limit]);
+    fetchPage(serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, globalFilter, limit);
+  }, [fetchPage, serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, globalFilter, limit]);
 
   // Reset to page 0 when filters/limit change
   const handleSeverityChange = (v: string) => {
@@ -1418,17 +1419,12 @@ export function FindingsTable() {
   // Client-side text search filter on top of server page
   // ---------------------------------------------------------------------------
   const filteredRows = useMemo(() => {
-    // Use drill filter value if active, otherwise use manual search
-    const searchValue = (isFiltered && filter.mode !== "workload_drill") ? filter.value : globalFilter;
-    if (!searchValue?.trim()) return rows;
-    const q = searchValue.toLowerCase();
-    return rows.filter(
-      (r) =>
-        r.cve_id.toLowerCase().includes(q) ||
-        (r.image_name ?? "").toLowerCase().includes(q) ||
-        r.package_name.toLowerCase().includes(q)
-    );
-  }, [rows, globalFilter, isFiltered, filter.value, filter.mode]);
+    // Server-side filtering handles global search (q param).
+    // Client-side filter only for drill-in mode (workload_drill) where
+    // we filter by image_id from the drill result.
+    if (!isFiltered || filter.mode !== "workload_drill") return rows;
+    return rows.filter((r) => r.image_id === filter.value);
+  }, [rows, isFiltered, filter.value, filter.mode]);
 
   // ---------------------------------------------------------------------------
   // Aggregated rows — derived from filteredRows based on groupBy
@@ -1771,6 +1767,7 @@ export function FindingsTable() {
             if (isFiltered) {
               clearFilter();
             }
+            setServerPage(0);
             setGlobalFilter(e.target.value);
           }}
           className="text-[12px] max-w-[240px]"
