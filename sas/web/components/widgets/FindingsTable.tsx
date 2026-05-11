@@ -12,8 +12,8 @@ import {
 } from "@tanstack/react-table";
 import { WidgetCard } from "./WidgetCard";
 import { Input } from "@/components/ui/input";
-import { getFindings, getWorkloadCounts, getWorkloadsForCve } from "@/lib/api/client";
-import type { FindingsResponse, WeightedCve } from "@/lib/api/client";
+import { getFindings, getWorkloadCounts, getWorkloadsForCve, runQuery, getEntities } from "@/lib/api/client";
+import type { FindingsResponse, WeightedCve, QueryIn, QueryResult } from "@/lib/api/client";
 import { CHART_COLORS } from "@/lib/charts/defaults";
 import { TABLE_DEFAULTS } from "@/lib/table.defaults";
 import { loadWeights, saveWeights, DEFAULT_WEIGHTS, type WeightConfig } from "@/lib/weighted-weights";
@@ -128,6 +128,22 @@ function SortIcon({ direction }: { direction: "asc" | "desc" | false }) {
       {direction === "asc" ? "↑" : "↓"}
     </span>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Rollup query builder for image group-by mode
+// ---------------------------------------------------------------------------
+function makeImageQuery(measure: string): QueryIn {
+  return {
+    lens: "Image",
+    traversal: [],
+    time: { mode: "last_n_snapshots" as const, n: 1, granularity: "day" as const },
+    measure,
+    filters: [],
+    group_by: ["image_id"],
+    order_by: null,
+    limit: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1285,6 +1301,10 @@ export function FindingsTable() {
   const [workloadLoading, setWorkloadLoading] = useState(false);
   const [workloadError, setWorkloadError] = useState<string | null>(null);
 
+  // Image rollup data (server-side aggregated counts from rollup endpoint)
+  const [imageRollupData, setImageRollupData] = useState<ImageRow[]>([]);
+  const [imageRollupTotal, setImageRollupTotal] = useState(0);
+
   // Load weights from localStorage on mount
   useEffect(() => {
     setWeights(loadWeights());
@@ -1334,6 +1354,76 @@ export function FindingsTable() {
   }, [isFiltered, filter.field, filter.value]);
 
   // ---------------------------------------------------------------------------
+  // Image rollup data fetch (server-side aggregated counts)
+  // Replaces client-side aggregation for groupBy="image" mode
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (groupBy !== "image") return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    Promise.all([
+      getEntities("Image") as Promise<Array<{ id: string; label: string; repository: string; tag: string; last_seen?: string }>>,
+      runQuery(makeImageQuery("count_open_critical")),
+      runQuery(makeImageQuery("count_open_high")),
+      runQuery(makeImageQuery("count_open")),
+    ])
+      .then(([entities, criticalResult, highResult, totalResult]) => {
+        if (cancelled) return;
+
+        // Build lookup maps: image_id → count at latest snapshot
+        function buildMap(result: QueryResult): Map<string, number> {
+          const map = new Map<string, number>();
+          for (const s of result.series) {
+            const id = s.key.image_id as string | undefined;
+            if (!id) continue;
+            const lastY = s.y[s.y.length - 1];
+            if (typeof lastY === "number") {
+              map.set(id, lastY);
+            }
+          }
+          return map;
+        }
+
+        const criticalMap = buildMap(criticalResult);
+        const highMap = buildMap(highResult);
+        const totalMap = buildMap(totalResult);
+
+        const rows: ImageRow[] = entities.map((entity) => ({
+          image_name: entity.label || `${entity.repository}:${entity.tag}`,
+          total_findings: totalMap.get(entity.id) ?? 0,
+          critical_count: criticalMap.get(entity.id) ?? 0,
+          high_count: highMap.get(entity.id) ?? 0,
+          distinct_cves: 0,
+          distinct_packages: 0,
+          last_seen: entity.last_seen ?? new Date().toISOString(),
+        }));
+
+        setImageRollupData(rows);
+        setImageRollupTotal(rows.length);
+        setLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to load image data.");
+          setLoading(false);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [groupBy]);
+
+  // Clear image rollup data when switching away from image group mode
+  useEffect(() => {
+    if (groupBy !== "image") {
+      setImageRollupData([]);
+      setImageRollupTotal(0);
+    }
+  }, [groupBy]);
+
+  // ---------------------------------------------------------------------------
   // Fetch
   // ---------------------------------------------------------------------------
   const fetchPage = useCallback(
@@ -1364,8 +1454,10 @@ export function FindingsTable() {
   );
 
   useEffect(() => {
+    // Skip fetchPage when groupBy="image" — rollup endpoint handles that mode
+    if (groupBy === "image") return;
     fetchPage(serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, globalFilter, limit);
-  }, [fetchPage, serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, globalFilter, limit]);
+  }, [fetchPage, serverPage, severityFilter, stateFilter, fixFilter, inUseFilter, exploitFilter, globalFilter, limit, groupBy]);
 
   // Reset to page 0 when filters/limit change
   const handleSeverityChange = (v: string) => {
@@ -1463,38 +1555,9 @@ export function FindingsTable() {
 
   const imageRows = useMemo<ImageRow[]>(() => {
     if (groupBy !== "image") return [];
-    const map = new Map<string, { total: number; crit: number; high: number; cves: Set<string>; pkgs: Set<string>; lastSeen: string }>();
-    for (const row of filteredRows) {
-      const key = row.image_name ?? "(unknown)";
-      const existing = map.get(key);
-      if (!existing) {
-        map.set(key, {
-          total: 1,
-          crit: row.severity === "Critical" ? 1 : 0,
-          high: row.severity === "High" ? 1 : 0,
-          cves: new Set([row.cve_id]),
-          pkgs: new Set([row.package_name]),
-          lastSeen: row.last_seen,
-        });
-      } else {
-        existing.total += 1;
-        if (row.severity === "Critical") existing.crit += 1;
-        if (row.severity === "High") existing.high += 1;
-        existing.cves.add(row.cve_id);
-        existing.pkgs.add(row.package_name);
-        if (row.last_seen > existing.lastSeen) existing.lastSeen = row.last_seen;
-      }
-    }
-    return Array.from(map.entries()).map(([image_name, v]) => ({
-      image_name,
-      total_findings: v.total,
-      critical_count: v.crit,
-      high_count: v.high,
-      distinct_cves: v.cves.size,
-      distinct_packages: v.pkgs.size,
-      last_seen: v.lastSeen,
-    }));
-  }, [filteredRows, groupBy]);
+    // Use server-side rollup data instead of client-side aggregation
+    return imageRollupData;
+  }, [groupBy, imageRollupData]);
 
   const packageRows = useMemo<PackageRow[]>(() => {
     if (groupBy !== "package") return [];
@@ -1721,6 +1784,15 @@ export function FindingsTable() {
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const firstRow = serverPage * limit + 1;
   const lastRow = Math.min((serverPage + 1) * limit, total);
+
+  // Client-side pagination for image rollup data
+  const paginatedImageRows = useMemo(() => {
+    const start = serverPage * limit;
+    return imageRows.slice(start, start + limit);
+  }, [imageRows, serverPage, limit]);
+  const imageTotalPages = Math.max(1, Math.ceil(imageRollupTotal / limit));
+  const imageFirstRow = serverPage * limit + 1;
+  const imageLastRow = Math.min((serverPage + 1) * limit, imageRollupTotal);
 
   // Empty-state message per groupBy mode
   const emptyMessages: Record<GroupBy, string> = {
@@ -2000,7 +2072,7 @@ export function FindingsTable() {
       tableArea = (
         <div style={{ overflowX: "auto" }}>
           <ResizableTable
-            data={imageRows}
+            data={paginatedImageRows}
             columns={IMAGE_COLUMNS}
             emptyMessage={emptyMessages.image}
             colSpan={IMAGE_COLUMNS.length}
@@ -2103,6 +2175,43 @@ export function FindingsTable() {
           </button>
         </div>
       </div>
+    ) : groupBy === "image" ? (
+      <div className="flex items-center justify-between pt-1">
+        <span className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
+          {imageRollupTotal === 0
+            ? "No images"
+            : `Showing ${imageFirstRow}–${imageLastRow} of ${imageRollupTotal.toLocaleString("en-GB")} images`}
+        </span>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setServerPage((p) => Math.max(0, p - 1))}
+            disabled={serverPage === 0}
+            className="text-[11px] px-2 py-0.5 rounded disabled:opacity-30"
+            style={{
+              border: "1px solid var(--border-subtle)",
+              color: "var(--fg-primary)",
+              cursor: serverPage === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            Prev
+          </button>
+          <span className="text-[11px] self-center" style={{ color: "var(--fg-muted)" }}>
+            {serverPage + 1} / {imageTotalPages}
+          </span>
+          <button
+            onClick={() => setServerPage((p) => Math.min(imageTotalPages - 1, p + 1))}
+            disabled={serverPage >= imageTotalPages - 1}
+            className="text-[11px] px-2 py-0.5 rounded disabled:opacity-30"
+            style={{
+              border: "1px solid var(--border-subtle)",
+              color: "var(--fg-primary)",
+              cursor: serverPage >= imageTotalPages - 1 ? "not-allowed" : "pointer",
+            }}
+          >
+            Next
+          </button>
+        </div>
+      </div>
     ) : (
       <p className="text-[10px] pt-1" style={{ color: "var(--fg-muted)" }}>
         Group-by aggregates the currently loaded {rows.length.toLocaleString("en-GB")} rows. To see all data grouped, use a higher limit.
@@ -2131,6 +2240,8 @@ export function FindingsTable() {
         setExploitFilter(false);
         setGroupBy("none");
         setServerPage(0);
+        setImageRollupData([]);
+        setImageRollupTotal(0);
       }}
       className="text-[11px] px-2 py-0.5 rounded"
       style={{
