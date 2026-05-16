@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 
+GRACE_PERIOD_DAYS = 3
+
 ReasonCode = Literal["PATCHED", "RETIRED", "SCALED_TO_ZERO", "ACCEPTED",
-                     "FEED_WITHDRAWN", "UNKNOWN"]
+                     "FEED_WITHDRAWN", "UNKNOWN", "STALE"]
 
 
 @dataclass(frozen=True)
