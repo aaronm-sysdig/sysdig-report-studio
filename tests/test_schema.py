@@ -1,6 +1,6 @@
 import duckdb
 import pytest
-from sas.ingest.schema import create_schema, EXPECTED_TABLES
+from sas.ingest.schema import create_schema, migrate_schema, EXPECTED_TABLES
 
 
 def test_create_schema_creates_all_tables(db):
@@ -24,6 +24,7 @@ def test_create_schema_is_idempotent(db):
 
 def test_finding_state_has_expected_columns(db):
     create_schema(db)
+    migrate_schema(db)
     rows = db.execute(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_name = 'finding_state' ORDER BY column_name"
@@ -35,7 +36,7 @@ def test_finding_state_has_expected_columns(db):
         "in_use", "fix_available", "fix_version", "risk_accepted",
         "public_exploit", "first_seen", "last_seen", "state",
         "reason_code", "closed_at", "reopened_at", "reopen_count",
-        "days_open", "is_regression",
+        "days_open", "is_regression", "grace_period_since",
     }
     assert required.issubset(cols), f"missing: {required - cols}"
 

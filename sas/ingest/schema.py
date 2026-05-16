@@ -304,3 +304,7 @@ def migrate_schema(conn) -> None:
         "ALTER TABLE finding_state "
         "ADD COLUMN IF NOT EXISTS cisa_kev_known_ransomware BOOLEAN DEFAULT FALSE"
     )
+    conn.execute(
+        "ALTER TABLE finding_state "
+        "ADD COLUMN IF NOT EXISTS grace_period_since TIMESTAMPTZ DEFAULT NULL"
+    )
