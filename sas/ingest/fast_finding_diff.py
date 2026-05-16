@@ -1,7 +1,9 @@
 """Set-based finding diff — bulk SQL for all transitions."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from sas.ingest.reason_code import GRACE_PERIOD_DAYS
 
 
 def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
@@ -70,7 +72,9 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
             risk_accepted = c.risk_accepted,
             public_exploit = c.public_exploit,
             cisa_kev_known_ransomware = c.cisa_kev_known_ransomware,
-            days_open = date_diff('day', c.prior_first_seen, '{today}'::date)
+            days_open = date_diff('day', c.prior_first_seen, '{today}'::date),
+            reason_code = NULL,
+            grace_period_since = NULL
         FROM _classified c
         WHERE c.transition = 'RESEEN'
           AND c.finding_id = finding_state.finding_id
@@ -157,8 +161,34 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
         "SELECT COUNT(*) FROM _new_vs_reopened WHERE closed_finding_id IS NOT NULL"
     ).fetchone()[0]
 
-    # 5. DISAPPEARED — OPEN findings not in today's data
-    # Use _today_findings (not _classified) to avoid false positives on NEW findings
+    # 5. GRACE PERIOD — handle disappeared findings
+    # 5a. Capture and expire STALE findings past the grace period
+    today_date = snapshot_at.date()
+    cutoff = today_date - timedelta(days=GRACE_PERIOD_DAYS)
+    cutoff_iso = cutoff.replace(hour=23, minute=59, second=59).isoformat()
+
+    conn.execute(f"""
+        CREATE OR REPLACE TEMPORARY TABLE _expired_stale AS
+        SELECT * FROM finding_state
+        WHERE reason_code = 'STALE'
+          AND grace_period_since <= '{cutoff_iso}'::timestamptz
+    """)
+
+    expired_count = conn.execute(
+        "SELECT COUNT(*) FROM _expired_stale"
+    ).fetchone()[0]
+
+    conn.execute(f"""
+        UPDATE finding_state SET
+          state = 'CLOSED',
+          reason_code = 'REMEDIED',
+          closed_at = '{t}'::timestamptz,
+          days_open = date_diff('day', finding_state.first_seen, '{today}'::date)
+        FROM _expired_stale
+        WHERE finding_state.finding_id = _expired_stale.finding_id
+    """)
+
+    # 5b. Mark newly disappeared as STALE (OPEN findings not in today's data, excluding already-STALE)
     conn.execute("""
         CREATE OR REPLACE TEMPORARY TABLE _disappeared AS
         SELECT fs.*
@@ -169,7 +199,9 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
             AND tf.package_name = fs.package_name
             AND tf.package_version = fs.package_version
             AND tf.package_path = fs.package_path
-        WHERE fs.state = 'OPEN' AND tf.image_id IS NULL
+        WHERE fs.state = 'OPEN'
+          AND fs.reason_code IS DISTINCT FROM 'STALE'
+          AND tf.image_id IS NULL
     """)
 
     disapp_count = conn.execute(
@@ -179,16 +211,13 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
     if disapp_count > 0:
         conn.execute(f"""
             UPDATE finding_state SET
-              state = 'CLOSED',
-              reason_code = 'REMEDIED',
-              closed_at = '{t}'::timestamptz,
-              days_open = date_diff('day', finding_state.first_seen, '{today}'::date)
+              reason_code = 'STALE',
+              grace_period_since = '{t}'::timestamptz
             FROM _disappeared d
             WHERE finding_state.finding_id = d.finding_id
         """)
-        closed_count = disapp_count
-    else:
-        closed_count = 0
+
+    closed_count = expired_count
 
     # 6. Write daily OPEN snapshot for historical rollup accuracy
     # This captures the OPEN count per image at this point in time,
@@ -244,11 +273,12 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
 
     conn.execute(f"""
         INSERT INTO daily_closed_snapshot (date, image_id, count_closed)
-        SELECT
-            '{today}'::DATE AS date,
-            image_id,
-            COUNT(*) AS count_closed
-        FROM _disappeared
+        SELECT '{today}'::DATE AS date, image_id, COUNT(*) AS count_closed
+        FROM (
+            SELECT image_id FROM _expired_stale
+            UNION ALL
+            SELECT image_id FROM _disappeared
+        )
         GROUP BY image_id
         ON CONFLICT (date, image_id) DO UPDATE SET
             count_closed = EXCLUDED.count_closed
@@ -258,6 +288,7 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
     conn.execute("DROP TABLE IF EXISTS _today_findings")
     conn.execute("DROP TABLE IF EXISTS _classified")
     conn.execute("DROP TABLE IF EXISTS _new_vs_reopened")
+    conn.execute("DROP TABLE IF EXISTS _expired_stale")
     conn.execute("DROP TABLE IF EXISTS _disappeared")
 
     return {"new": new_count, "reseen": resseen_count, "reopened": reopened_count,
