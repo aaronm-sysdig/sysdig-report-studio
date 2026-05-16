@@ -274,11 +274,7 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
     conn.execute(f"""
         INSERT INTO daily_closed_snapshot (date, image_id, count_closed)
         SELECT '{today}'::DATE AS date, image_id, COUNT(*) AS count_closed
-        FROM (
-            SELECT image_id FROM _expired_stale
-            UNION ALL
-            SELECT image_id FROM _disappeared
-        )
+        FROM _expired_stale
         GROUP BY image_id
         ON CONFLICT (date, image_id) DO UPDATE SET
             count_closed = EXCLUDED.count_closed

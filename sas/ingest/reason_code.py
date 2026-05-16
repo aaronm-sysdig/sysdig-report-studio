@@ -13,7 +13,7 @@ from typing import Literal
 GRACE_PERIOD_DAYS = 3
 
 ReasonCode = Literal["PATCHED", "RETIRED", "SCALED_TO_ZERO", "ACCEPTED",
-                     "FEED_WITHDRAWN", "UNKNOWN", "STALE"]
+                     "FEED_WITHDRAWN", "UNKNOWN", "STALE", "REMEDIED"]
 
 
 @dataclass(frozen=True)

@@ -190,13 +190,16 @@ def diff_and_apply_findings(
     for key, prior in open_by_key.items():
         if key in today_keys:
             continue
-        # Check if this finding is now CLOSED (expired above) — skip it
+        # Check if this finding is now CLOSED (expired above) or already STALE
         fs_row = conn.execute(
-            "SELECT state FROM finding_state WHERE finding_id = ?",
+            "SELECT state, reason_code FROM finding_state WHERE finding_id = ?",
             [prior["finding_id"]],
         ).fetchone()
-        if fs_row and fs_row[0] == "CLOSED":
-            continue
+        if fs_row:
+            if fs_row[0] == "CLOSED":
+                continue
+            if fs_row[1] == "STALE":
+                continue  # Already STALE, don't reset grace_period_since
 
         conn.execute(
             """
