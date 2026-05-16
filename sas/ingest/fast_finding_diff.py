@@ -1,7 +1,7 @@
 """Set-based finding diff — bulk SQL for all transitions."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sas.ingest.reason_code import GRACE_PERIOD_DAYS
 
@@ -164,8 +164,8 @@ def diff_and_apply_findings(conn, snapshot_at: datetime) -> dict:
     # 5. GRACE PERIOD — handle disappeared findings
     # 5a. Capture and expire STALE findings past the grace period
     today_date = snapshot_at.date()
-    cutoff = today_date - timedelta(days=GRACE_PERIOD_DAYS)
-    cutoff_iso = cutoff.replace(hour=23, minute=59, second=59).isoformat()
+    cutoff = datetime(today_date.year, today_date.month, today_date.day, 23, 59, 59, tzinfo=timezone.utc) - timedelta(days=GRACE_PERIOD_DAYS)
+    cutoff_iso = cutoff.isoformat()
 
     conn.execute(f"""
         CREATE OR REPLACE TEMPORARY TABLE _expired_stale AS
