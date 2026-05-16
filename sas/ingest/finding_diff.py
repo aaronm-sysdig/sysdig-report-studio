@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import sys
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 
 import pandas as pd
 
-from sas.ingest.reason_code import ReasonContext, compute_reason_code
+from sas.ingest.reason_code import ReasonContext, compute_reason_code, GRACE_PERIOD_DAYS
 
 
 def _dbg(msg: str) -> None:
@@ -119,7 +119,8 @@ def diff_and_apply_findings(
                 UPDATE finding_state SET
                   last_seen = ?, severity = ?, cvss_score = ?, in_use = ?,
                   fix_available = ?, fix_version = ?, risk_accepted = ?,
-                  public_exploit = ?, cisa_kev_known_ransomware = ?, days_open = ?
+                  public_exploit = ?, cisa_kev_known_ransomware = ?, days_open = ?,
+                  reason_code = NULL, grace_period_since = NULL
                 WHERE finding_id = ?
                 """,
                 [snapshot_at, v["severity"], v["cvss_score"], v["in_use"],
@@ -164,29 +165,49 @@ def diff_and_apply_findings(
 
     # 2. DISAPPEARED — OPEN rows whose natural key wasn't in today
     disapp_count = sum(1 for key in open_by_key if key not in today_keys)
-    _dbg(f"Processing {disapp_count:,} DISAPPEARED (per-row SQL with reason context)...")
+    _dbg(f"Processing {disapp_count:,} DISAPPEARED (grace period logic)...")
     t = time.monotonic()
+
+    # 2a. Expire old STALE findings past grace period
+    cutoff = datetime(today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc) - timedelta(days=GRACE_PERIOD_DAYS)
+    expired_rows = conn.execute(
+        """
+        UPDATE finding_state SET
+          state = 'CLOSED',
+          reason_code = 'REMEDIED',
+          closed_at = ?,
+          days_open = date_diff('day', first_seen, ?)
+        WHERE reason_code = 'STALE'
+          AND grace_period_since <= ?
+        RETURNING finding_id
+        """,
+        [snapshot_at, today, cutoff],
+    ).fetchall()
+    expired_count = len(expired_rows)
+    counts["closed"] += expired_count
+
+    # 2b. Mark newly disappeared as STALE (exclude already-STALE)
     for key, prior in open_by_key.items():
         if key in today_keys:
             continue
-        image_id, cve_id, _, _, _ = key
-        ctx = _build_reason_context(
-            conn, image_id=image_id, cve_id=cve_id,
-            risk_accepted_was=prior["risk_accepted_was"],
-            today=today, today_cve_ids=today_cve_ids, df=df,
-        )
-        reason = compute_reason_code(ctx)
-        days_open = (today - prior["first_seen"].date()).days
+        # Check if this finding is now CLOSED (expired above) — skip it
+        fs_row = conn.execute(
+            "SELECT state FROM finding_state WHERE finding_id = ?",
+            [prior["finding_id"]],
+        ).fetchone()
+        if fs_row and fs_row[0] == "CLOSED":
+            continue
+
         conn.execute(
             """
             UPDATE finding_state SET
-              state = 'CLOSED', reason_code = ?, closed_at = ?, days_open = ?
+              reason_code = 'STALE',
+              grace_period_since = ?
             WHERE finding_id = ?
             """,
-            [reason, snapshot_at, days_open, prior["finding_id"]],
+            [snapshot_at, prior["finding_id"]],
         )
-        counts["closed"] += 1
-    _dbg(f"  ✓ DISAPPEARED done in {int((time.monotonic()-t)*1000)}ms — closed={counts['closed']}")
+    _dbg(f"  ✓ DISAPPEARED done in {int((time.monotonic()-t)*1000)}ms — expired={expired_count}, stale={disapp_count - expired_count}")
     _dbg(f"Total diff: {_ms()}ms")
 
     return counts

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import duckdb
 
-from sas.ingest.schema import create_schema
+from sas.ingest.schema import create_schema, migrate_schema
 from sas.ingest.pipeline import run_pipeline
 from sas.ingest.ownership import ResolverChain, NamespaceFallback
 
@@ -21,6 +21,7 @@ def test_real_sample_ingests_cleanly(tmp_path):
     conn = duckdb.connect(str(db_path))
     try:
         create_schema(conn)
+        migrate_schema(conn)
         resolver = ResolverChain([NamespaceFallback()])
         result = run_pipeline(conn=conn, csv_path=SAMPLE_CSV, resolver=resolver)
     finally:
@@ -69,6 +70,7 @@ def test_real_sample_reingestion_is_idempotent(tmp_path):
     conn = duckdb.connect(str(db_path))
     try:
         create_schema(conn)
+        migrate_schema(conn)
         first = run_pipeline(conn=conn, csv_path=SAMPLE_CSV, resolver=resolver)
         first_findings = conn.execute("SELECT count(*) FROM finding_state").fetchone()[0]
     finally:

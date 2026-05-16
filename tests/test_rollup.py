@@ -2,7 +2,7 @@ from datetime import datetime, timezone, date
 import pandas as pd
 import pytest
 
-from sas.ingest.schema import create_schema
+from sas.ingest.schema import create_schema, migrate_schema
 from sas.ingest.entity_upsert import upsert_entities
 from sas.ingest.runtime_snapshot import write_runtime_snapshot
 from sas.ingest.finding_diff import diff_and_apply_findings
@@ -31,6 +31,7 @@ def _basic_row(cve, severity="Critical", image_id="sha256:aaa"):
 
 def test_rollup_by_image_counts_open_criticals(db):
     create_schema(db)
+    migrate_schema(db)
     snap = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     df = pd.DataFrame([
         _basic_row("CVE-1", severity="Critical"),
@@ -52,6 +53,7 @@ def test_rollup_by_image_counts_open_criticals(db):
 
 def test_rollup_counts_new_on_the_day_they_appeared(db):
     create_schema(db)
+    migrate_schema(db)
     snap = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     df = pd.DataFrame([_basic_row("CVE-1")])
     upsert_entities(db, df, snap); write_runtime_snapshot(db, df, snap)
@@ -65,6 +67,7 @@ def test_rollup_counts_new_on_the_day_they_appeared(db):
 
 def test_rollup_is_idempotent(db):
     create_schema(db)
+    migrate_schema(db)
     snap = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     df = pd.DataFrame([_basic_row("CVE-1")])
     upsert_entities(db, df, snap); write_runtime_snapshot(db, df, snap)

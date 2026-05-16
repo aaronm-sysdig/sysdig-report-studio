@@ -1,7 +1,7 @@
 """Scenario-based integration tests: one test per synthetic scenario in tests/scenarios/."""
 from pathlib import Path
 
-from sas.ingest.schema import create_schema
+from sas.ingest.schema import create_schema, migrate_schema
 from sas.ingest.pipeline import run_pipeline
 from sas.ingest.ownership import ResolverChain, NamespaceFallback, LabelStrategy
 
@@ -9,8 +9,9 @@ _SCENARIOS = Path(__file__).parent / "scenarios"
 
 
 def test_scenario_patched_via_new_digest(db):
-    """CVE-2026-1001 closes PATCHED when v2 digest drops it; CVE-2026-1002 stays OPEN."""
+    """CVE-2026-1001 closes after grace period; CVE-2026-1002 stays OPEN."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     for csv in sorted((_SCENARIOS / "patched_via_new_digest").glob("day*.csv")):
         run_pipeline(conn=db, csv_path=csv, resolver=resolver)
@@ -19,7 +20,8 @@ def test_scenario_patched_via_new_digest(db):
         "SELECT reason_code FROM finding_state WHERE cve_id='CVE-2026-1001' AND state='CLOSED'"
     ).fetchone()
     assert closed is not None
-    assert closed[0] == "PATCHED"
+    # Grace period expiry closes with REMEDIED reason
+    assert closed[0] == "REMEDIED"
 
     open_row = db.execute(
         "SELECT state FROM finding_state WHERE cve_id='CVE-2026-1002' AND state='OPEN'"
@@ -32,6 +34,7 @@ def test_scenario_patched_via_new_digest(db):
 def test_scenario_digest_churn_same_tag(db):
     """Same tag rebuilt 3 times → 3 image rows, 1 repo, 3 image_in_repository entries; 3 findings (2 CLOSED RETIRED, 1 OPEN)."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     for csv in sorted((_SCENARIOS / "digest_churn_same_tag").glob("day*.csv")):
         run_pipeline(conn=db, csv_path=csv, resolver=resolver)
@@ -53,8 +56,9 @@ def test_scenario_digest_churn_same_tag(db):
 
 
 def test_scenario_retired_workload(db):
-    """Workload disappears on day 3; CVE-2026-3001 closes with reason_code=RETIRED."""
+    """Workload disappears on day 3; CVE-2026-3001 closes after grace period."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     for csv in sorted((_SCENARIOS / "retired_workload").glob("day*.csv")):
         run_pipeline(conn=db, csv_path=csv, resolver=resolver)
@@ -63,7 +67,8 @@ def test_scenario_retired_workload(db):
         "SELECT state, reason_code FROM finding_state WHERE cve_id='CVE-2026-3001' AND state='CLOSED'"
     ).fetchone()
     assert row is not None
-    assert row[1] == "RETIRED"
+    # Grace period expiry closes with REMEDIED reason
+    assert row[1] == "REMEDIED"
 
 
 def test_scenario_accepted_risk(db):
@@ -73,6 +78,7 @@ def test_scenario_accepted_risk(db):
     the pipeline has no 'ACCEPTED' reason code path.
     """
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     scenario_dir = _SCENARIOS / "accepted_risk"
 
@@ -96,6 +102,7 @@ def test_scenario_accepted_risk(db):
 def test_scenario_cve_regression(db):
     """CVE disappears then reappears: 2 rows (one CLOSED, one OPEN with reopen_count=1, is_regression=True)."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     for csv in sorted((_SCENARIOS / "cve_regression").glob("day*.csv")):
         run_pipeline(conn=db, csv_path=csv, resolver=resolver)
@@ -114,12 +121,13 @@ def test_scenario_cve_regression(db):
     assert reopen_count == 1
     assert is_regression is True
     assert reopened_at is not None
-    assert last_seen.date().isoformat() == "2026-05-04"
+    assert last_seen.date().isoformat() == "2026-05-06"
 
 
 def test_scenario_multi_cluster(db):
     """Image spreads to staging-cluster on day 2; both clusters appear in daily rollup tables."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     for csv in sorted((_SCENARIOS / "multi_cluster").glob("day*.csv")):
         run_pipeline(conn=db, csv_path=csv, resolver=resolver)
@@ -144,6 +152,7 @@ def test_scenario_multi_cluster(db):
 def test_scenario_ecr_registry_port(db):
     """registry.internal:5000/team/app:v1 parses correctly — port in registry host is handled."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     for csv in sorted((_SCENARIOS / "ecr_registry_port").glob("day*.csv")):
         run_pipeline(conn=db, csv_path=csv, resolver=resolver)
@@ -161,6 +170,7 @@ def test_scenario_ecr_registry_port(db):
 def test_scenario_label_ownership(db):
     """LabelStrategy("team") resolves team_id from namespace_labels; owner_id is None."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([LabelStrategy("team"), NamespaceFallback()])
     for csv in sorted((_SCENARIOS / "label_ownership").glob("day*.csv")):
         run_pipeline(conn=db, csv_path=csv, resolver=resolver)
@@ -177,6 +187,7 @@ def test_scenario_label_ownership(db):
 def test_scenario_bulk_smoke(db):
     """200-row ingest across 20 images x 10 CVEs completes without error."""
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     results = []
     for csv in sorted((_SCENARIOS / "bulk_smoke").glob("day*.csv")):

@@ -1,7 +1,7 @@
 """Scenario: CVE fixed by upgrading to a new image digest (v1->v2 drops CVE-2026-1001).
 
-Expected: CVE-2026-1001 closes on day 3 with reason_code=PATCHED because a sibling
-digest (sha256:v2-digest) in the same repo exists without it.
+Expected: CVE-2026-1001 enters STALE on day 3 (v1 gone), closes after grace period
+with reason_code=REMEDIED. CVE-2026-1002 stays OPEN on v2.
 """
 import sys
 from pathlib import Path
@@ -41,7 +41,7 @@ def main():
     b.write_csv(HERE / "day2_2026-05-02.csv")
     b.clear()
 
-    # Day 3 — v2 image only has CVE-2026-1002; v1 is gone
+    # Day 3 — v2 image only has CVE-2026-1002; v1 is gone (STALE begins)
     b.add_finding(
         vulnerability_name="CVE-2026-1002",
         image_id="sha256:v2-digest",
@@ -51,6 +51,31 @@ def main():
         kubernetes_workload_name="myapp",
     )
     b.write_csv(HERE / "day3_2026-05-03.csv")
+    b.clear()
+
+    # Day 4-5 — v2 still present (STALE continues, 1-2 days into grace)
+    for day, date in enumerate(["2026-05-04", "2026-05-05"], start=4):
+        b.add_finding(
+            vulnerability_name="CVE-2026-1002",
+            image_id="sha256:v2-digest",
+            image_name="registry.example.com/myapp:v2.0",
+            kubernetes_cluster_name="prod-cluster",
+            kubernetes_namespace_name="default",
+            kubernetes_workload_name="myapp",
+        )
+        b.write_csv(HERE / f"day{day}_{date}.csv")
+        b.clear()
+
+    # Day 6 — grace period expired, CVE-2026-1001 closes
+    b.add_finding(
+        vulnerability_name="CVE-2026-1002",
+        image_id="sha256:v2-digest",
+        image_name="registry.example.com/myapp:v2.0",
+        kubernetes_cluster_name="prod-cluster",
+        kubernetes_namespace_name="default",
+        kubernetes_workload_name="myapp",
+    )
+    b.write_csv(HERE / "day6_2026-05-06.csv")
     b.clear()
 
 

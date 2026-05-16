@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 import pytest
 
-from sas.ingest.schema import create_schema
+from sas.ingest.schema import create_schema, migrate_schema
 from sas.ingest.runtime_snapshot import write_runtime_snapshot
 from sas.ingest.entity_upsert import upsert_entities
 from sas.ingest.finding_diff import diff_and_apply_findings
@@ -52,6 +52,7 @@ def _prep(db, df, snapshot_at):
 
 def test_new_finding_inserts_open_row(db):
     create_schema(db)
+    migrate_schema(db)
     day1 = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     df = pd.DataFrame([_row()])
     _prep(db, df, day1)
@@ -64,6 +65,7 @@ def test_new_finding_inserts_open_row(db):
 
 def test_reseen_finding_updates_last_seen_only(db):
     create_schema(db)
+    migrate_schema(db)
     day1 = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     day2 = day1 + timedelta(days=1)
     df = pd.DataFrame([_row()])
@@ -79,9 +81,10 @@ def test_reseen_finding_updates_last_seen_only(db):
     assert row[2] == "OPEN"
 
 
-def test_disappeared_finding_closes_with_reason_retired(db):
-    """Image disappears entirely → image_still_runs_anywhere=False → RETIRED."""
+def test_disappeared_finding_becomes_stale(db):
+    """Image disappears entirely → enters grace period as STALE (not immediately CLOSED)."""
     create_schema(db)
+    migrate_schema(db)
     day1 = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     day2 = day1 + timedelta(days=1)
     df1 = pd.DataFrame([_row(image_id="sha256:aaa")])
@@ -90,20 +93,21 @@ def test_disappeared_finding_closes_with_reason_retired(db):
     df2 = pd.DataFrame([_row(image_id="sha256:bbb")])
     _prep(db, df2, day2); diff_and_apply_findings(db, df2, day2)
 
-    closed_rows = db.execute(
+    rows = db.execute(
         "SELECT state, reason_code FROM finding_state "
         "WHERE image_id = 'sha256:aaa'"
     ).fetchall()
-    assert closed_rows == [("CLOSED", "RETIRED")]
+    assert rows == [("OPEN", "STALE")]
 
 
-def test_disappeared_finding_without_risk_flip_is_unknown_or_feed_withdrawn(db):
+def test_disappeared_finding_becomes_stale_not_accepted(db):
     """Sibling risk_accepted=True on a DIFFERENT CVE does NOT trigger ACCEPTED.
 
-    The ACCEPTED path requires the same (image, cve, pkg) natural key to be
-    flipped — not a different finding on the same image.
+    The finding disappears → STALE (grace period). ACCEPTED reason_code is
+    only computed when the grace period expires, not on first disappearance.
     """
     create_schema(db)
+    migrate_schema(db)
     day1 = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     day2 = day1 + timedelta(days=1)
     df1 = pd.DataFrame([_row(risk_accepted=False)])
@@ -114,21 +118,27 @@ def test_disappeared_finding_without_risk_flip_is_unknown_or_feed_withdrawn(db):
     row = db.execute(
         "SELECT reason_code FROM finding_state WHERE cve_id = 'CVE-2026-00001'"
     ).fetchone()
-    # image still runs; original CVE not in today's feed → FEED_WITHDRAWN
-    assert row[0] in ("UNKNOWN", "FEED_WITHDRAWN")
+    # Disappeared finding enters grace period as STALE
+    assert row[0] == "STALE"
 
 
 def test_reopened_finding_creates_new_record_and_increments_reopen_count(db):
     create_schema(db)
+    migrate_schema(db)
     day1 = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     day2 = day1 + timedelta(days=1)
-    day3 = day1 + timedelta(days=2)
+    day6 = day1 + timedelta(days=5)  # grace period (3 days) has expired
+    day7 = day1 + timedelta(days=6)
     df_with = pd.DataFrame([_row()])
     df_without = pd.DataFrame([_row(cve="CVE-2026-00002")])  # same image, different CVE
 
     _prep(db, df_with, day1); diff_and_apply_findings(db, df_with, day1)
+    # Day 2: disappears → STALE
     _prep(db, df_without, day2); diff_and_apply_findings(db, df_without, day2)
-    _prep(db, df_with, day3); diff_and_apply_findings(db, df_with, day3)
+    # Day 6: grace period expired → CLOSED/REMEDIED
+    _prep(db, df_without, day6); diff_and_apply_findings(db, df_without, day6)
+    # Day 7: reappears → REOPENED
+    _prep(db, df_with, day7); diff_and_apply_findings(db, df_with, day7)
 
     rows = db.execute(
         "SELECT state, reopen_count, is_regression FROM finding_state "
@@ -145,6 +155,7 @@ def test_reopened_finding_creates_new_record_and_increments_reopen_count(db):
 
 def test_days_open_is_computed(db):
     create_schema(db)
+    migrate_schema(db)
     day1 = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
     day5 = day1 + timedelta(days=4)
     df = pd.DataFrame([_row()])

@@ -2,13 +2,14 @@ from datetime import datetime, timezone
 import pandas as pd
 import pytest
 
-from sas.ingest.schema import create_schema
+from sas.ingest.schema import create_schema, migrate_schema
 from sas.ingest.pipeline import run_pipeline
 from sas.ingest.ownership import ResolverChain, NamespaceFallback
 
 
 def test_run_pipeline_end_to_end_on_minimal_csv(db, fixtures_dir):
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     result = run_pipeline(
         conn=db,
@@ -26,6 +27,7 @@ def test_run_pipeline_end_to_end_on_minimal_csv(db, fixtures_dir):
 
 def test_rerunning_same_csv_is_noop(db, fixtures_dir):
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
     run_pipeline(conn=db, csv_path=fixtures_dir / "minimal_valid.csv", resolver=resolver)
     result2 = run_pipeline(conn=db, csv_path=fixtures_dir / "minimal_valid.csv", resolver=resolver)
@@ -43,6 +45,7 @@ def test_pipeline_rolls_back_on_mid_flight_failure(db, fixtures_dir, monkeypatch
     import sas.ingest.pipeline as pipeline_mod
 
     create_schema(db)
+    migrate_schema(db)
     resolver = ResolverChain([NamespaceFallback()])
 
     # Force the rollup stage (late in the pipeline) to explode.
