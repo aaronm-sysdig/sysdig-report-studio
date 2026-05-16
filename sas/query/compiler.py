@@ -67,7 +67,7 @@ _DIRECT_DATE_COL = {
     "count_fixed_patched":   ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code = 'PATCHED'"),
     "count_fixed_retired":   ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code = 'RETIRED'"),
     "count_fixed_accepted":  ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code = 'ACCEPTED'"),
-    "count_fixed_other":     ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code IN ('FEED_WITHDRAWN', 'UNKNOWN')"),
+    "count_fixed_other":     ("finding_state.closed_at",   "finding_state.state = 'CLOSED' AND finding_state.reason_code IN ('FEED_WITHDRAWN', 'UNKNOWN', 'REMEDIED')"),
 }
 
 _DIRECT_AGGREGATE = {
